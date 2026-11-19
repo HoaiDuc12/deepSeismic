@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+runs/
+data/dataset.csv
+data/images/
+data/masks/
+data/annotated/
+data/clean/
+data/imported/
+data/groups.csv
+demo/**/preview/
+demo/**/previews/
+demo/**/audit/
+demo/**/evaluation/

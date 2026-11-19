@@ -1,0 +1,18 @@
+{
+  "arch": "attention_unet",
+  "width": 24,
+  "tile_size": 256,
+  "batch_size": 4,
+  "epochs": 60,
+  "patches_per_image": 16,
+  "lr": 0.001,
+  "sampling": "balanced",
+  "boundary_weight": 1.0,
+  "dice_weight": 0.5,
+  "weight_decay": 0.01,
+  "grad_clip": 1.0,
+  "patience": 12,
+  "lr_patience": 3,
+  "amp": "auto",
+  "seed": 42
+}

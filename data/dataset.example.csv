@@ -1,0 +1,5 @@
+image,mask,group,split
+images/line-a.png,labels/line-a.png,block-a,train
+images/line-a-nearby.png,labels/line-a-nearby.json,block-a,train
+images/line-b.png,labels/line-b.json,block-b,val
+images/line-c.png,labels/line-c.png,block-c,test

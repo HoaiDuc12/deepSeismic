@@ -1,0 +1,5 @@
+image,group,split
+line-a-001.png,khoi-a,train
+line-a-002.png,khoi-a,train
+line-b-001.png,khoi-b,val
+line-c-001.png,khoi-c,test

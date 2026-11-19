@@ -1,0 +1,497 @@
+{
+  "best_epoch": 12,
+  "completed_epochs": 12,
+  "stopped_early": false,
+  "architecture": "unet",
+  "parameter_count": 122519,
+  "config": {
+    "config": null,
+    "manifest": "runs\\simulated-v2\\dataset.csv",
+    "classes": "classes.json",
+    "out": "runs\\comparison-unet",
+    "epochs": 12,
+    "batch_size": 8,
+    "tile_size": 112,
+    "patches_per_image": 10,
+    "width": 8,
+    "arch": "unet",
+    "sampling": "balanced",
+    "boundary_weight": 1.0,
+    "dice_weight": 0.5,
+    "weight_decay": 0.01,
+    "grad_clip": 1.0,
+    "patience": 0,
+    "lr_patience": 3,
+    "amp": "auto",
+    "resume": null,
+    "lr": 0.003,
+    "val_fraction": 0.2,
+    "seed": 42,
+    "device": "cpu",
+    "cpu_threads": 3,
+    "demo": true
+  },
+  "selection_metric": "mean_iou_facies_union",
+  "dataset_sha256": "250946f2794e41e57a8bafd592d17a3a766977a96991209d1f204e21cdadf6cf",
+  "demo": true,
+  "seed": 42,
+  "split_groups": {
+    "train": [
+      "sim-00",
+      "sim-01",
+      "sim-02",
+      "sim-03",
+      "sim-04",
+      "sim-05",
+      "sim-06",
+      "sim-07",
+      "sim-08",
+      "sim-09",
+      "sim-10",
+      "sim-11",
+      "sim-12",
+      "sim-13",
+      "sim-14",
+      "sim-15"
+    ],
+    "validation": [
+      "sim-16",
+      "sim-17",
+      "sim-18"
+    ],
+    "test": [
+      "sim-19",
+      "sim-20",
+      "sim-21"
+    ]
+  },
+  "train_support_pixels_by_id": [
+    277393,
+    476953,
+    507994,
+    490146,
+    505210,
+    502189,
+    484147
+  ],
+  "validation": {
+    "sections": 3,
+    "labeled_pixels": 608256,
+    "pixel_accuracy": 0.716805095223064,
+    "mean_iou_facies": 0.535889835993877,
+    "mean_dice_facies": 0.6806049484534459,
+    "mean_iou_facies_union": 0.535889835993877,
+    "mean_f1_facies": 0.6806049484534459,
+    "classes": [
+      {
+        "id": 0,
+        "name": "Nền",
+        "support_pixels": 51652,
+        "predicted_pixels": 53314,
+        "true_positive_pixels": 50872,
+        "iou": 0.9404370170444042,
+        "dice": 0.9693043461692358,
+        "precision": 0.9541958960123045,
+        "recall": 0.9848989390536669,
+        "f1": 0.9693043461692358
+      },
+      {
+        "id": 1,
+        "name": "Hỗn loạn",
+        "support_pixels": 98535,
+        "predicted_pixels": 56517,
+        "true_positive_pixels": 48952,
+        "iou": 0.4613760603204524,
+        "dice": 0.6314268761447772,
+        "precision": 0.8661464692039563,
+        "recall": 0.49679809204851066,
+        "f1": 0.6314268761447772
+      },
+      {
+        "id": 2,
+        "name": "Song song",
+        "support_pixels": 97231,
+        "predicted_pixels": 49439,
+        "true_positive_pixels": 29601,
+        "iou": 0.2528508828127002,
+        "dice": 0.4036408263448558,
+        "precision": 0.5987378385485144,
+        "recall": 0.3044399419938086,
+        "f1": 0.4036408263448558
+      },
+      {
+        "id": 3,
+        "name": "Á song song",
+        "support_pixels": 79302,
+        "predicted_pixels": 123019,
+        "true_positive_pixels": 72109,
+        "iou": 0.5537815255122416,
+        "dice": 0.7128177500111209,
+        "precision": 0.586161487249937,
+        "recall": 0.9092961085470732,
+        "f1": 0.7128177500111209
+      },
+      {
+        "id": 4,
+        "name": "Gò đồi",
+        "support_pixels": 93548,
+        "predicted_pixels": 95608,
+        "true_positive_pixels": 86848,
+        "iou": 0.8488876725182781,
+        "dice": 0.9182685191059231,
+        "precision": 0.9083758681281902,
+        "recall": 0.9283790139821269,
+        "f1": 0.9182685191059231
+      },
+      {
+        "id": 5,
+        "name": "Phân kì",
+        "support_pixels": 96796,
+        "predicted_pixels": 79874,
+        "true_positive_pixels": 64319,
+        "iou": 0.5724826659308774,
+        "dice": 0.7281258844172751,
+        "precision": 0.8052557778501139,
+        "recall": 0.6644799371874871,
+        "f1": 0.7281258844172751
+      },
+      {
+        "id": 6,
+        "name": "Sigma",
+        "support_pixels": 91192,
+        "predicted_pixels": 150485,
+        "true_positive_pixels": 83300,
+        "iou": 0.525960208868712,
+        "dice": 0.6893498346967233,
+        "precision": 0.5535435425457687,
+        "recall": 0.9134573208176155,
+        "f1": 0.6893498346967233
+      }
+    ],
+    "confusion_matrix": [
+      [
+        50872,
+        478,
+        1,
+        41,
+        224,
+        26,
+        10
+      ],
+      [
+        341,
+        48952,
+        58,
+        48323,
+        45,
+        10,
+        806
+      ],
+      [
+        558,
+        316,
+        29601,
+        837,
+        174,
+        9648,
+        56097
+      ],
+      [
+        469,
+        5734,
+        41,
+        72109,
+        15,
+        0,
+        934
+      ],
+      [
+        350,
+        374,
+        568,
+        149,
+        86848,
+        5127,
+        132
+      ],
+      [
+        363,
+        499,
+        13694,
+        417,
+        8298,
+        64319,
+        9206
+      ],
+      [
+        361,
+        164,
+        5476,
+        1143,
+        4,
+        744,
+        83300
+      ]
+    ],
+    "aggregation": "mean_iou_facies/mean_dice_facies: trung bình các tướng có pixel chuyên gia; mean_iou_facies_union/mean_f1_facies: gồm cả tướng chỉ được dự đoán; loại nền ID 0. Giá trị không xác định là null; hàng confusion là nhãn thật, cột là dự đoán."
+  },
+  "test": {
+    "sections": 3,
+    "labeled_pixels": 608256,
+    "pixel_accuracy": 0.7103555082070707,
+    "mean_iou_facies": 0.5323780153981317,
+    "mean_dice_facies": 0.6688844277537745,
+    "mean_iou_facies_union": 0.5323780153981317,
+    "mean_f1_facies": 0.6688844277537745,
+    "classes": [
+      {
+        "id": 0,
+        "name": "Nền",
+        "support_pixels": 52047,
+        "predicted_pixels": 53438,
+        "true_positive_pixels": 51093,
+        "iou": 0.9393476981909105,
+        "dice": 0.9687254111959046,
+        "precision": 0.9561173696620382,
+        "recall": 0.9816704132803044,
+        "f1": 0.9687254111959046
+      },
+      {
+        "id": 1,
+        "name": "Hỗn loạn",
+        "support_pixels": 97120,
+        "predicted_pixels": 68836,
+        "true_positive_pixels": 48928,
+        "iou": 0.4180879789452097,
+        "dice": 0.5896502687459326,
+        "precision": 0.71079086524493,
+        "recall": 0.5037891268533773,
+        "f1": 0.5896502687459326
+      },
+      {
+        "id": 2,
+        "name": "Song song",
+        "support_pixels": 96894,
+        "predicted_pixels": 36806,
+        "true_positive_pixels": 21282,
+        "iou": 0.1893113202512053,
+        "dice": 0.31835452505609574,
+        "precision": 0.5782209422376786,
+        "recall": 0.21964208310112082,
+        "f1": 0.31835452505609574
+      },
+      {
+        "id": 3,
+        "name": "Á song song",
+        "support_pixels": 99633,
+        "predicted_pixels": 131433,
+        "true_positive_pixels": 80959,
+        "iou": 0.5393419360855923,
+        "dice": 0.700743510512148,
+        "precision": 0.615971635738361,
+        "recall": 0.8125721397528931,
+        "f1": 0.700743510512148
+      },
+      {
+        "id": 4,
+        "name": "Gò đồi",
+        "support_pixels": 86634,
+        "predicted_pixels": 88937,
+        "true_positive_pixels": 82611,
+        "iou": 0.8886725473321859,
+        "dice": 0.9410551856513889,
+        "precision": 0.9288709985720229,
+        "recall": 0.9535632661541658,
+        "f1": 0.9410551856513889
+      },
+      {
+        "id": 5,
+        "name": "Phân kì",
+        "support_pixels": 90823,
+        "predicted_pixels": 93976,
+        "true_positive_pixels": 72228,
+        "iou": 0.6416217320624317,
+        "dice": 0.7816925416263075,
+        "precision": 0.768579211713629,
+        "recall": 0.7952611122733229,
+        "f1": 0.7816925416263075
+      },
+      {
+        "id": 6,
+        "name": "Sigma",
+        "support_pixels": 85105,
+        "predicted_pixels": 134830,
+        "true_positive_pixels": 74977,
+        "iou": 0.5172325777121649,
+        "dice": 0.681810534930775,
+        "precision": 0.5560854409256101,
+        "recall": 0.880994066153575,
+        "f1": 0.681810534930775
+      }
+    ],
+    "confusion_matrix": [
+      [
+        51093,
+        548,
+        0,
+        78,
+        253,
+        13,
+        62
+      ],
+      [
+        274,
+        48928,
+        42,
+        47418,
+        45,
+        2,
+        411
+      ],
+      [
+        403,
+        246,
+        21282,
+        456,
+        63,
+        19227,
+        55217
+      ],
+      [
+        587,
+        17187,
+        108,
+        80959,
+        18,
+        7,
+        767
+      ],
+      [
+        423,
+        997,
+        547,
+        240,
+        82611,
+        1703,
+        113
+      ],
+      [
+        391,
+        794,
+        7510,
+        690,
+        5927,
+        72228,
+        3283
+      ],
+      [
+        267,
+        136,
+        7317,
+        1592,
+        20,
+        796,
+        74977
+      ]
+    ],
+    "aggregation": "mean_iou_facies/mean_dice_facies: trung bình các tướng có pixel chuyên gia; mean_iou_facies_union/mean_f1_facies: gồm cả tướng chỉ được dự đoán; loại nền ID 0. Giá trị không xác định là null; hàng confusion là nhãn thật, cột là dự đoán."
+  },
+  "history": [
+    {
+      "epoch": 1,
+      "loss": 2.3271006107330323,
+      "val_miou_facies": 0.07838628565161647,
+      "val_miou_union": 0.07838628565161647,
+      "lr": 0.003,
+      "seconds": 9.211460500000157
+    },
+    {
+      "epoch": 2,
+      "loss": 2.183838152885437,
+      "val_miou_facies": 0.0883129676101105,
+      "val_miou_union": 0.0883129676101105,
+      "lr": 0.003,
+      "seconds": 9.223845099999835
+    },
+    {
+      "epoch": 3,
+      "loss": 2.0948060035705565,
+      "val_miou_facies": 0.12398850464364362,
+      "val_miou_union": 0.12398850464364362,
+      "lr": 0.003,
+      "seconds": 13.055150600000161
+    },
+    {
+      "epoch": 4,
+      "loss": 1.9881903171539306,
+      "val_miou_facies": 0.1466295945014144,
+      "val_miou_union": 0.1466295945014144,
+      "lr": 0.003,
+      "seconds": 10.75507860000016
+    },
+    {
+      "epoch": 5,
+      "loss": 1.8629564464092254,
+      "val_miou_facies": 0.19647087140565375,
+      "val_miou_union": 0.19647087140565375,
+      "lr": 0.003,
+      "seconds": 8.888152300000002
+    },
+    {
+      "epoch": 6,
+      "loss": 1.7710501432418824,
+      "val_miou_facies": 0.27369346260485067,
+      "val_miou_union": 0.27369346260485067,
+      "lr": 0.003,
+      "seconds": 9.210729100000208
+    },
+    {
+      "epoch": 7,
+      "loss": 1.5961255729198456,
+      "val_miou_facies": 0.3197775386951294,
+      "val_miou_union": 0.3197775386951294,
+      "lr": 0.003,
+      "seconds": 9.086682799999835
+    },
+    {
+      "epoch": 8,
+      "loss": 1.5339947462081909,
+      "val_miou_facies": 0.37507924285274935,
+      "val_miou_union": 0.37507924285274935,
+      "lr": 0.003,
+      "seconds": 11.37249810000003
+    },
+    {
+      "epoch": 9,
+      "loss": 1.414020651578903,
+      "val_miou_facies": 0.31771404199931447,
+      "val_miou_union": 0.31771404199931447,
+      "lr": 0.003,
+      "seconds": 12.326662899999974
+    },
+    {
+      "epoch": 10,
+      "loss": 1.346963346004486,
+      "val_miou_facies": 0.38571300674916725,
+      "val_miou_union": 0.38571300674916725,
+      "lr": 0.003,
+      "seconds": 9.173102500000368
+    },
+    {
+      "epoch": 11,
+      "loss": 1.256353145837784,
+      "val_miou_facies": 0.39541022693017197,
+      "val_miou_union": 0.39541022693017197,
+      "lr": 0.003,
+      "seconds": 9.121167499999956
+    },
+    {
+      "epoch": 12,
+      "loss": 1.173750287294388,
+      "val_miou_facies": 0.535889835993877,
+      "val_miou_union": 0.535889835993877,
+      "lr": 0.003,
+      "seconds": 9.031675000000178
+    }
+  ]
+}

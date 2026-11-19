@@ -1,0 +1,12 @@
+{
+  "arch": "attention_unet",
+  "width": 8,
+  "tile_size": 64,
+  "batch_size": 2,
+  "epochs": 2,
+  "patches_per_image": 2,
+  "device": "cpu",
+  "cpu_threads": 2,
+  "amp": "off",
+  "patience": 0
+}

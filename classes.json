@@ -1,0 +1,9 @@
+[
+  {"id": 0, "name": "Nền", "color": [0, 0, 0], "aliases": ["nen", "background", "_background_"]},
+  {"id": 1, "name": "Hỗn loạn", "color": [238, 101, 95], "aliases": ["hon loan", "chaotic", "chaos"]},
+  {"id": 2, "name": "Song song", "color": [76, 197, 250], "aliases": ["parallel"]},
+  {"id": 3, "name": "Á song song", "color": [133, 204, 114], "aliases": ["a song song", "subparallel", "sub-parallel"]},
+  {"id": 4, "name": "Gò đồi", "color": [248, 187, 79], "aliases": ["go doi", "mounded", "mound"]},
+  {"id": 5, "name": "Phân kì", "color": [220, 144, 251], "aliases": ["phân kỳ", "phan ki", "phan ky", "divergent", "diverging"]},
+  {"id": 6, "name": "Sigma", "color": [73, 221, 191], "aliases": ["σ", "sigmoid", "sigmoidal"]}
+]

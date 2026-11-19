@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <title>Vẽ lại vùng tướng địa chấn</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17363a;
+      --muted: #536871;
+      --line: #d7e2e2;
+      --accent: #096b60;
+      --accent-bg: #e5f5ee;
+      font: 15px/1.45 "Segoe UI", system-ui, sans-serif;
+      color: var(--ink);
+      background: #f0f5f4;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { max-width: 1720px; margin: auto; padding: 24px; }
+    header { margin-bottom: 16px; }
+    h1 { margin: 0; font-size: clamp(1.6rem, 3vw, 2.35rem); letter-spacing: -.035em; line-height: 1.2; }
+    h2 { font-size: 1rem; margin: 0 0 8px; }
+    p { margin: 6px 0; }
+    .muted { color: var(--muted); }
+    .small { font-size: .875rem; }
+    .card { border: 1px solid var(--line); border-radius: 12px; background: white; }
+    .controls, .viewbar, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+    .controls { padding: 12px; margin-bottom: 12px; }
+    .viewbar { padding: 9px 10px; min-height: 49px; }
+    button, select {
+      font: inherit; color: inherit; background: white; border: 1px solid #bdcdce;
+      border-radius: 7px; padding: 6px 11px; cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: var(--accent-bg); border-color: #83aea6; }
+    button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid #228c7f; outline-offset: 2px; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: white; font-weight: 600; }
+    button.primary:hover:not(:disabled) { background: #06594f; }
+    button:disabled { opacity: .48; cursor: not-allowed; }
+    button[aria-pressed="true"] { background: var(--accent-bg); border-color: #63a89a; }
+    .push { margin-left: auto; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; gap: 12px; }
+    .viewer { position: relative; overflow: hidden; background: #18282e; }
+    .viewport { position: relative; width: 100%; height: min(66vh, 1100px); min-height: 300px; overflow: auto; }
+    .surface { position: relative; cursor: crosshair; }
+    .surface img { display: block; width: 100%; height: 100%; image-orientation: none; user-select: none; pointer-events: none; }
+    .pan .surface { cursor: grab; touch-action: none; }
+    .pan.dragging .surface { cursor: grabbing; }
+    canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+    .empty { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; padding: 24px; color: #deebee; }
+    .empty strong { font-size: 1.1rem; }
+    .viewfoot { padding: 8px 11px; min-height: 35px; overflow-wrap: anywhere; }
+    .sidebar { padding: 14px; }
+    .sidebar section + section { margin-top: 16px; padding-top: 13px; border-top: 1px solid var(--line); }
+    .labelrow { display: flex; gap: 7px; align-items: center; }
+    .labelrow select { flex: 1; min-width: 0; }
+    .dot { display: inline-block; width: 12px; height: 12px; flex: 0 0 12px; border-radius: 50%; border: 1px solid #829997; }
+    .actions { margin-top: 9px; }
+    .actions button { font-size: .89rem; }
+    #shapes { display: grid; gap: 5px; max-height: 260px; overflow: auto; margin: 8px 0; }
+    .shape { display: flex; align-items: center; text-align: left; gap: 7px; font-size: .9rem; }
+    .shape span { min-width: 0; overflow-wrap: anywhere; }
+    .shape-status { display: block; font-size: .78rem; color: var(--muted); }
+    .shape[data-review="pending"] .shape-status { color: #97620e; font-weight: 600; }
+    .shape[data-review="reviewed"] .shape-status { color: var(--accent); }
+    #message { min-height: 1.45em; margin: 10px 1px 0; overflow-wrap: anywhere; }
+    #message[data-level="error"] { color: #a4251c; font-weight: 600; }
+    #message[data-level="ok"] { color: var(--accent); font-weight: 600; }
+    kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 3px; }
+    @media (max-width: 900px) {
+      body { padding: 12px; }
+      .layout { grid-template-columns: 1fr; }
+      .viewport { height: 50vh; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Vẽ lại vùng tướng địa chấn</h1>
+    <p class="muted">Mở ảnh có chú giải, đánh dấu các đỉnh dọc theo đường bao và lưu nhãn để huấn luyện.</p>
+    <p class="muted small">Nhãn cần ghép với ảnh sạch, không có đường bao hoặc chữ, cùng kích thước và tọa độ pixel. Ảnh chỉ được xử lý trong trình duyệt; nhớ tải JSON trước khi đóng.</p>
+  </header>
+
+  <div class="controls card" aria-label="Tệp">
+    <button id="open-ref" type="button">Mở ảnh tham chiếu</button>
+    <button id="open-clean" type="button" disabled>Mở ảnh sạch cùng lát cắt</button>
+    <button id="open-json" type="button" disabled>Mở nhãn đã lưu</button>
+    <button id="open-classes" type="button" title="Nạp bộ nhãn của dự án từ classes.json">Đổi bộ nhãn</button>
+    <button id="save" type="button" class="primary push" disabled>Tải nhãn LabelMe</button>
+    <input id="ref-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,.png,.jpg,.jpeg,.webp,.bmp" hidden>
+    <input id="clean-file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp,.png,.jpg,.jpeg,.webp,.bmp" hidden>
+    <input id="json-file" type="file" accept=".json,application/json" hidden>
+    <input id="classes-file" type="file" accept=".json,application/json" hidden>
+  </div>
+
+  <main class="layout">
+    <section class="card" aria-label="Lát cắt địa chấn">
+      <div class="viewbar" aria-label="Điều khiển ảnh">
+        <button id="fit" type="button" disabled>Vừa khung</button>
+        <button id="actual" type="button" title="Một pixel ảnh bằng một pixel CSS" disabled>1:1</button>
+        <button id="zoom-out" type="button" aria-label="Thu nhỏ" disabled>−</button>
+        <output id="zoom-value" aria-label="Tỷ lệ phóng">—</output>
+        <button id="zoom-in" type="button" aria-label="Phóng to" disabled>+</button>
+        <button id="pan" type="button" aria-pressed="false" disabled>Kéo ảnh</button>
+        <button id="switch-view" type="button" disabled>Xem ảnh sạch</button>
+        <label class="small push"><input id="overlay-visible" type="checkbox" checked> Hiện lớp vẽ</label>
+      </div>
+      <div class="viewer">
+        <div id="viewport" class="viewport" tabindex="0" aria-label="Khung vẽ; bấm để thêm đỉnh, giữ Space để kéo ảnh">
+          <div id="surface" class="surface" hidden><img id="image" alt="Ảnh lát cắt địa chấn" draggable="false"></div>
+        </div>
+        <canvas id="overlay" aria-hidden="true" hidden></canvas>
+        <div id="empty" class="empty"><strong>Mở ảnh có đường bao và tên tướng</strong><p>Ảnh PNG, JPEG, WebP hoặc BMP</p></div>
+      </div>
+      <div id="viewfoot" class="viewfoot muted small">Chưa mở ảnh</div>
+    </section>
+    <aside class="sidebar card">
+      <section>
+        <h2><label for="label">Nhãn đang vẽ</label></h2>
+        <div class="labelrow">
+          <span id="label-dot" class="dot" aria-hidden="true"></span>
+          <select id="label"></select>
+        </div>
+        <p id="draft-count" class="small muted">0 đỉnh đang vẽ</p>
+        <div class="actions">
+          <button id="finish" type="button" class="primary" disabled>Khép vùng</button>
+          <button id="undo" type="button" disabled>Hoàn tác</button>
+          <button id="cancel" type="button" disabled>Hủy nét</button>
+        </div>
+        <p class="small muted">Bấm để đặt đỉnh. Dùng <kbd>Enter</kbd> để khép vùng, <kbd>Esc</kbd> để hủy nét hoặc giữ <kbd>Space</kbd> để kéo ảnh.</p>
+      </section>
+      <section>
+        <h2>Vùng đã vẽ <output id="shape-count">0</output></h2>
+        <p id="shape-empty" class="small muted">Các vùng đã khép sẽ xuất hiện tại đây.</p>
+        <div id="shapes" aria-label="Danh sách vùng đã vẽ"></div>
+        <p id="review-summary" class="small muted" hidden></p>
+        <div class="actions">
+          <button id="reviewed" type="button" disabled>Xác nhận đã rà soát</button>
+          <button id="relabel" type="button" disabled>Áp nhãn đang chọn</button>
+          <button id="delete" type="button" disabled>Xóa vùng</button>
+        </div>
+      </section>
+      <section class="small muted">
+        <p>Chọn <strong>Bỏ qua</strong> cho vùng không chắc. Phần chưa vẽ cũng được bỏ qua khi huấn luyện.</p>
+        <p>Khi hai vùng chồng nhau, vùng vẽ sau được ưu tiên.</p>
+        <p>Vùng dự đoán có viền đứt cần được xác nhận từng vùng. Chỉ lưu lại tệp sẽ giữ nguyên trạng thái chưa rà soát.</p>
+      </section>
+    </aside>
+  </main>
+  <p id="message" class="small muted" role="status" aria-live="polite"></p>
+
+  <script>
+    'use strict';
+    const byId = (id) => document.getElementById(id);
+    const openers = {ref: 'open-ref', clean: 'open-clean', json: 'open-json', classes: 'open-classes'};
+    const DEFAULT_LABELS = [
+      {id: 0, name: 'Nền', color: '#525c69', aliases: ['nen', 'background', '_background_']},
+      {id: 1, name: 'Hỗn loạn', color: '#ee655f', aliases: ['hon loan', 'chaotic', 'chaos']},
+      {id: 2, name: 'Song song', color: '#4cc5fa', aliases: ['parallel']},
+      {id: 3, name: 'Á song song', color: '#85cc72', aliases: ['a song song', 'subparallel', 'sub-parallel']},
+      {id: 4, name: 'Gò đồi', color: '#f8bb4f', aliases: ['go doi', 'mounded', 'mound']},
+      {id: 5, name: 'Phân kì', color: '#dc90fb', aliases: ['phân kỳ', 'phan ki', 'phan ky', 'divergent', 'diverging']},
+      {id: 6, name: 'Sigma', color: '#49ddbf', aliases: ['σ', 'sigmoid', 'sigmoidal']}
+    ];
+    const IGNORE = {id: 255, name: '__ignore__', title: 'Bỏ qua', color: '#c0c5cf', aliases: []};
+    const viewport = byId('viewport');
+    const canvas = byId('overlay');
+    const context = canvas.getContext('2d');
+    const image = byId('image');
+    const surface = byId('surface');
+    const labelSelect = byId('label');
+    const state = {
+      ref: null, clean: null, viewingClean: false, loading: false,
+      labels: [...DEFAULT_LABELS, IGNORE], shapes: [], draft: [], history: [],
+      flags: {}, documentMeta: {},
+      selected: -1, dirty: false, scale: 1, fitted: true, pan: false,
+      space: false, drag: null, pointer: null, suppressClick: false
+    };
+    let paintRequest = 0;
+
+    function status(text, level = '') {
+      byId('message').textContent = text;
+      byId('message').dataset.level = level;
+    }
+
+    const labelInfo = (name) => state.labels.find((entry) => entry.name === name);
+    const title = (name) => labelInfo(name)?.title || name;
+    const color = (name) => labelInfo(name)?.color || '#ffffff';
+    const normalizeLabel = (name) => name.normalize('NFC').trim().toLowerCase();
+    const hasImage = () => state.ref !== null;
+    const needSave = () => state.dirty || state.draft.length > 0;
+    const needsReview = (shape) => (state.flags.machine_prediction === true ||
+      shape.flags?.machine_prediction === true) && shape.flags?.reviewed !== true;
+    function readFlags(flags, source) {
+      if (flags === undefined) return {};
+      if (!flags || typeof flags !== 'object' || Array.isArray(flags)) throw new Error('Cờ trạng thái không hợp lệ: ' + source + '.');
+      for (const key of ['machine_prediction', 'reviewed']) {
+        if (key in flags && typeof flags[key] !== 'boolean') throw new Error('Cờ ' + key + ' phải là true hoặc false: ' + source + '.');
+      }
+      return {...flags};
+    }
+
+    function updateUI() {
+      const active = hasImage() && !state.loading;
+      byId('open-ref').disabled = state.loading;
+      byId('open-classes').disabled = state.loading;
+      for (const key of ['open-clean', 'open-json', 'fit', 'actual', 'zoom-out', 'zoom-in', 'pan']) {
+        byId(key).disabled = !active;
+      }
+      byId('switch-view').disabled = !active || !state.clean;
+      byId('switch-view').textContent = state.viewingClean ? 'Xem ảnh tham chiếu' : 'Xem ảnh sạch';
+      byId('save').disabled = !active || !state.shapes.length || state.draft.length > 0;
+      byId('finish').disabled = !active || state.draft.length < 3;
+      byId('cancel').disabled = !active || state.draft.length === 0;
+      byId('undo').disabled = !active || (state.draft.length === 0 && state.history.length === 0);
+      byId('delete').disabled = !active || state.selected < 0;
+      byId('reviewed').disabled = !active || state.selected < 0 ||
+        state.shapes[state.selected].flags?.reviewed === true;
+      byId('relabel').disabled = !active || state.selected < 0 ||
+        state.shapes[state.selected].label === labelSelect.value;
+      byId('label-dot').style.backgroundColor = color(labelSelect.value);
+      byId('draft-count').textContent = state.draft.length + ' đỉnh đang vẽ';
+      byId('shape-count').textContent = state.shapes.length;
+      byId('shape-empty').hidden = state.shapes.length > 0;
+      byId('review-summary').hidden = state.shapes.length === 0;
+      byId('review-summary').textContent = state.shapes.filter(needsReview).length + ' vùng dự đoán chờ rà soát · ' +
+        state.shapes.filter((shape) => shape.flags?.reviewed === true).length + ' vùng đã xác nhận';
+      byId('zoom-value').textContent = active ? (100 * state.scale).toLocaleString('vi-VN', {maximumFractionDigits: 1}) + '%' : '—';
+      const source = state.viewingClean ? state.clean : state.ref;
+      if (source) {
+        byId('viewfoot').textContent = (state.viewingClean ? 'Ảnh sạch · ' : 'Tham chiếu · ') +
+          source.name + ' · ' + source.width + ' × ' + source.height + ' px';
+      }
+      schedulePaint();
+    }
+
+    function updateShapeList() {
+      const items = state.shapes.map((shape, index) => {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'shape';
+        row.dataset.review = needsReview(shape) ? 'pending' : shape.flags?.reviewed === true ? 'reviewed' : 'expert';
+        row.setAttribute('aria-pressed', String(index === state.selected));
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        dot.style.backgroundColor = color(shape.label);
+        dot.setAttribute('aria-hidden', 'true');
+        const name = document.createElement('span');
+        name.textContent = (index + 1) + '. ' + title(shape.label) + ' · ' + shape.points.length + ' đỉnh';
+        const review = document.createElement('span');
+        review.className = 'shape-status';
+        review.textContent = needsReview(shape) ? 'Dự đoán · chờ rà soát' :
+          shape.flags?.reviewed === true ? 'Đã rà soát' : 'Nhãn chuyên gia';
+        name.append(review);
+        row.append(dot, name);
+        row.addEventListener('click', () => {
+          state.selected = index;
+          Array.from(byId('shapes').children).forEach((item, i) => item.setAttribute('aria-pressed', String(i === index)));
+          updateUI();
+        });
+        return row;
+      });
+      byId('shapes').replaceChildren(...items);
+    }
+
+    function populateLabels(selected) {
+      labelSelect.replaceChildren(...state.labels.map((entry) => new Option(entry.title || entry.name, entry.name)));
+      labelSelect.value = labelInfo(selected) ? selected : state.labels[Math.min(1, state.labels.length - 1)].name;
+      updateUI();
+    }
+
+    function loadBitmap(file) {
+      return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const bitmap = new Image();
+        bitmap.onload = () => resolve({url, name: file.name, width: bitmap.naturalWidth, height: bitmap.naturalHeight});
+        bitmap.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error('Không đọc được ảnh. Hãy thử lưu ảnh thành PNG.'));
+        };
+        bitmap.src = url;
+      });
+    }
+
+    function confirmReplace() {
+      return !needSave() || window.confirm('Bạn có vùng chưa lưu. Tiếp tục thay thế vùng đang mở?');
+    }
+
+    async function openReference(file) {
+      if (!confirmReplace()) return;
+      const next = await loadBitmap(file);
+      for (const previous of [state.ref, state.clean]) if (previous) URL.revokeObjectURL(previous.url);
+      Object.assign(state, {
+        ref: next, clean: null, viewingClean: false, shapes: [], draft: [], history: [],
+        flags: {}, documentMeta: {},
+        selected: -1, pointer: null, dirty: false
+      });
+      image.src = next.url;
+      surface.hidden = false;
+      canvas.hidden = false;
+      byId('empty').hidden = true;
+      fit();
+      updateShapeList();
+      status('Chọn nhãn rồi bấm dọc theo viền vùng cần vẽ.');
+    }
+
+    async function openClean(file) {
+      const next = await loadBitmap(file);
+      if (next.width !== state.ref.width || next.height !== state.ref.height) {
+        URL.revokeObjectURL(next.url);
+        throw new Error('Ảnh sạch phải có cùng kích thước ' + state.ref.width + ' × ' + state.ref.height + ' pixel với ảnh tham chiếu.');
+      }
+      if (state.clean) URL.revokeObjectURL(state.clean.url);
+      state.clean = next;
+      if (state.viewingClean) image.src = next.url;
+      if (state.shapes.length) state.dirty = true;
+      status('Đã ghép ảnh sạch. Bấm “Xem ảnh sạch” để đối chiếu đường bao.', 'ok');
+    }
+
+    function canonicalLabel(input) {
+      if (typeof input !== 'string') return undefined;
+      const key = normalizeLabel(input);
+      return state.labels.find((entry) =>
+        [entry.name, ...entry.aliases].some((alias) => normalizeLabel(alias) === key)
+      )?.name;
+    }
+
+    async function openAnnotations(file) {
+      if (!confirmReplace()) return;
+      const doc = JSON.parse(await file.text());
+      const {width, height} = state.ref;
+      if (doc.imageWidth !== width || doc.imageHeight !== height || !Array.isArray(doc.shapes)) {
+        throw new Error('Tệp nhãn phải có danh sách vùng và cùng kích thước pixel với ảnh đã mở.');
+      }
+      const flags = readFlags(doc.flags, 'toàn tệp');
+      const parsed = doc.shapes.map((shape, index) => {
+        const regionLabel = canonicalLabel(shape.label);
+        if (!regionLabel) throw new Error('Nhãn chưa khai báo trong vùng ' + (index + 1) + '.');
+        let points = shape.points;
+        if (!Array.isArray(points) || points.some((point) => !Array.isArray(point) || point.length !== 2 ||
+          !Number.isFinite(point[0]) || !Number.isFinite(point[1]) ||
+          point[0] < 0 || point[0] >= width || point[1] < 0 || point[1] >= height)) {
+          throw new Error('Tọa độ không hợp lệ trong vùng ' + (index + 1) + '.');
+        }
+        if (shape.shape_type === 'rectangle' && points.length === 2) {
+          const [[left, top], [right, bottom]] = points;
+          points = [[left, top], [right, top], [right, bottom], [left, bottom]];
+        } else if ((shape.shape_type && shape.shape_type !== 'polygon') || points.length < 3) {
+          throw new Error('Chỉ hỗ trợ hình đa giác và hình chữ nhật. Kiểm tra vùng ' + (index + 1) + '.');
+        }
+        points = trimClosed(points);
+        if (!validPolygon(points)) throw new Error('Đường bao tự cắt hoặc không có diện tích trong vùng ' + (index + 1) + '.');
+        return {...shape, label: regionLabel, points, shape_type: 'polygon', flags: readFlags(shape.flags, 'vùng ' + (index + 1))};
+      });
+      const {shapes: originalShapes, flags: originalFlags, imageData, ...documentMeta} = doc;
+      Object.assign(state, {flags, documentMeta, shapes: parsed, draft: [], history: [], selected: -1, pointer: null, dirty: false});
+      updateShapeList();
+      const pending = parsed.filter(needsReview).length;
+      status('Đã mở ' + parsed.length + ' vùng; ' + pending + ' vùng dự đoán chờ rà soát.', pending ? '' : 'ok');
+    }
+
+    async function openClasses(file) {
+      const entries = JSON.parse(await file.text());
+      if (!Array.isArray(entries) || !entries.length) throw new Error('Bộ nhãn cần là một danh sách trong classes.json.');
+      const names = new Set([normalizeLabel(IGNORE.name)]);
+      const ids = new Set();
+      const parsed = entries.map((entry) => {
+        const {id, name, color: rgb, aliases = []} = entry;
+        if (!Number.isInteger(id) || id < 0 || id >= 255 || ids.has(id) || typeof name !== 'string' || !name.trim() ||
+            !Array.isArray(aliases) || aliases.some((alias) => typeof alias !== 'string' || !alias.trim())) {
+          throw new Error('Bộ nhãn có mã, tên hoặc bí danh không hợp lệ.');
+        }
+        const keys = new Set([name, ...aliases].map(normalizeLabel));
+        if ([...keys].some((key) => names.has(key))) throw new Error('Tên hoặc bí danh bị trùng trong bộ nhãn.');
+        keys.forEach((key) => names.add(key));
+        ids.add(id);
+        if (!Array.isArray(rgb) || rgb.length !== 3 || rgb.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+          throw new Error('Màu của mỗi nhãn cần có ba giá trị RGB từ 0 đến 255.');
+        }
+        return {id, name, aliases, color: '#' + rgb.map((value) => value.toString(16).padStart(2, '0')).join('')};
+      }).sort((a, b) => a.id - b.id);
+      if (parsed.some((entry, index) => entry.id !== index)) throw new Error('Mã tướng phải liên tiếp từ 0.');
+      parsed.push(IGNORE);
+      const previous = labelSelect.value;
+      const stillAvailable = (name) => parsed.some((entry) => entry.name === name);
+      if (state.shapes.some((shape) => !stillAvailable(shape.label)) || (state.draft.length && !stillAvailable(previous))) {
+        throw new Error('Bộ nhãn mới thiếu một nhãn đang dùng. Hãy lưu vùng rồi mở ảnh mới trước khi đổi bộ nhãn.');
+      }
+      state.labels = parsed;
+      state.history = state.history.filter((shapes) => shapes.every((shape) => stillAvailable(shape.label)));
+      populateLabels(previous);
+      updateShapeList();
+      status('Đã nạp ' + (parsed.length - 1) + ' nhãn.', 'ok');
+    }
+
+    const fileActions = {ref: openReference, clean: openClean, json: openAnnotations, classes: openClasses};
+    for (const [key, button] of Object.entries(openers)) {
+      const input = byId(key + '-file');
+      byId(button).addEventListener('click', () => input.click());
+      input.addEventListener('change', async () => {
+        const [file] = input.files;
+        input.value = '';
+        if (!file || state.loading) return;
+        state.loading = true;
+        updateUI();
+        try { await fileActions[key](file); }
+        catch (error) { status(error instanceof SyntaxError ? 'Tệp JSON không hợp lệ.' : error.message, 'error'); }
+        finally {
+          state.loading = false;
+          updateUI();
+        }
+      });
+    }
+
+    function setScale(scale, fitMode = false) {
+      if (!hasImage()) return;
+      const oldScale = state.scale;
+      const centerX = (viewport.scrollLeft + viewport.clientWidth / 2) / oldScale;
+      const centerY = (viewport.scrollTop + viewport.clientHeight / 2) / oldScale;
+      state.scale = scale;
+      state.fitted = fitMode;
+      surface.style.width = state.ref.width * scale + 'px';
+      surface.style.height = state.ref.height * scale + 'px';
+      viewport.scrollLeft = fitMode ? 0 : centerX * scale - viewport.clientWidth / 2;
+      viewport.scrollTop = fitMode ? 0 : centerY * scale - viewport.clientHeight / 2;
+      state.pointer = null;
+      updateUI();
+    }
+
+    function fitScale() {
+      return Math.min(1, viewport.clientWidth / state.ref.width, viewport.clientHeight / state.ref.height);
+    }
+    function fit() { setScale(fitScale(), true); }
+    byId('fit').addEventListener('click', fit);
+    byId('actual').addEventListener('click', () => setScale(1));
+    byId('zoom-in').addEventListener('click', () => setScale(Math.min(4, state.scale * 1.25)));
+    byId('zoom-out').addEventListener('click', () => setScale(Math.max(fitScale(), state.scale / 1.25)));
+    byId('switch-view').addEventListener('click', () => {
+      state.viewingClean = !state.viewingClean;
+      image.src = (state.viewingClean ? state.clean : state.ref).url;
+      updateUI();
+    });
+    byId('overlay-visible').addEventListener('change', schedulePaint);
+    labelSelect.addEventListener('change', updateUI);
+    viewport.addEventListener('scroll', schedulePaint);
+    new ResizeObserver(() => {
+      if (hasImage() && state.fitted) fit();
+      else schedulePaint();
+    }).observe(viewport);
+
+    function syncPan() {
+      viewport.classList.toggle('pan', state.pan || state.space || Boolean(state.drag));
+      byId('pan').setAttribute('aria-pressed', String(state.pan));
+      if (state.pan || state.space) state.pointer = null;
+      schedulePaint();
+    }
+    byId('pan').addEventListener('click', () => {
+      state.pan = !state.pan;
+      syncPan();
+    });
+
+    function imagePoint(event) {
+      const bounds = surface.getBoundingClientRect();
+      const x = Math.floor((event.clientX - bounds.left) * state.ref.width / bounds.width);
+      const y = Math.floor((event.clientY - bounds.top) * state.ref.height / bounds.height);
+      if (x < 0 || y < 0 || x >= state.ref.width || y >= state.ref.height) return null;
+      return [x, y];
+    }
+
+    viewport.addEventListener('pointerdown', (event) => {
+      if (!hasImage() || state.loading || !surface.contains(event.target)) return;
+      viewport.focus({preventScroll: true});
+      state.suppressClick = false;
+      if (event.button === 1 || (event.button === 0 && (state.pan || state.space))) {
+        event.preventDefault();
+        state.suppressClick = true;
+        state.drag = {
+          id: event.pointerId, x: event.clientX, y: event.clientY,
+          left: viewport.scrollLeft, top: viewport.scrollTop
+        };
+        viewport.setPointerCapture(event.pointerId);
+        viewport.classList.add('dragging');
+        syncPan();
+      }
+    });
+    viewport.addEventListener('pointermove', (event) => {
+      const drag = state.drag;
+      if (drag?.id === event.pointerId) {
+        viewport.scrollLeft = drag.left + drag.x - event.clientX;
+        viewport.scrollTop = drag.top + drag.y - event.clientY;
+      } else if (hasImage() && !state.pan && !state.space) {
+        state.pointer = imagePoint(event);
+        schedulePaint();
+      }
+    });
+    function stopDrag(event) {
+      if (state.drag?.id !== event.pointerId) return;
+      state.drag = null;
+      viewport.classList.remove('dragging');
+      syncPan();
+    }
+    viewport.addEventListener('pointerup', stopDrag);
+    viewport.addEventListener('pointercancel', stopDrag);
+    viewport.addEventListener('lostpointercapture', stopDrag);
+    viewport.addEventListener('pointerleave', () => { state.pointer = null; schedulePaint(); });
+    surface.addEventListener('click', (event) => {
+      if (!hasImage() || state.loading || state.pan || state.space || state.suppressClick) return;
+      const point = imagePoint(event);
+      const previous = state.draft.at(-1);
+      if (!point || (previous && previous[0] === point[0] && previous[1] === point[1])) return;
+      state.draft.push(point);
+      updateUI();
+    });
+
+    function schedulePaint() {
+      if (!paintRequest) paintRequest = requestAnimationFrame(paint);
+    }
+    function paint() {
+      paintRequest = 0;
+      if (!hasImage()) return;
+      const ratio = window.devicePixelRatio || 1;
+      const width = viewport.clientWidth;
+      const height = viewport.clientHeight;
+      const pixelsWide = Math.round(width * ratio);
+      const pixelsHigh = Math.round(height * ratio);
+      if (canvas.width !== pixelsWide || canvas.height !== pixelsHigh) {
+        canvas.width = pixelsWide;
+        canvas.height = pixelsHigh;
+        canvas.style.width = width + 'px';
+        canvas.style.height = height + 'px';
+      }
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, width, height);
+      const bounds = surface.getBoundingClientRect();
+      const viewBounds = viewport.getBoundingClientRect();
+      const scaleX = bounds.width / state.ref.width;
+      const scaleY = bounds.height / state.ref.height;
+      const view = ([x, y]) => [
+        bounds.left - viewBounds.left + (x + 0.5) * scaleX,
+        bounds.top - viewBounds.top + (y + 0.5) * scaleY
+      ];
+      context.lineJoin = 'round';
+      if (byId('overlay-visible').checked) {
+        state.shapes.forEach((shape, index) => {
+          const selected = index === state.selected;
+          context.setLineDash(needsReview(shape) ? [6, 4] : []);
+          drawPath(shape.points.map(view), color(shape.label), true, selected ? 3 : 1.5);
+          context.setLineDash([]);
+          if (selected) {
+            for (const point of shape.points.map(view)) drawDot(point, color(shape.label));
+          }
+        });
+      }
+      if (state.draft.length) {
+        const points = state.draft.map(view);
+        const ink = color(labelSelect.value);
+        drawPath(points, ink, false, 2);
+        for (const point of points) drawDot(point, ink);
+        if (state.pointer) {
+          context.setLineDash([5, 4]);
+          drawPath([points.at(-1), view(state.pointer)], ink, false, 1.5);
+          context.setLineDash([]);
+        }
+      }
+    }
+    function drawPath(points, ink, closed, thickness) {
+      context.beginPath();
+      context.moveTo(...points[0]);
+      for (const point of points.slice(1)) context.lineTo(...point);
+      if (closed) {
+        context.closePath();
+        context.fillStyle = ink + '40';
+        context.fill();
+      }
+      context.strokeStyle = '#132129';
+      context.lineWidth = thickness + 2;
+      context.stroke();
+      context.strokeStyle = ink;
+      context.lineWidth = thickness;
+      context.stroke();
+    }
+    function drawDot([x, y], ink) {
+      context.beginPath();
+      context.arc(x, y, 3.5, 0, 2 * Math.PI);
+      context.fillStyle = ink;
+      context.fill();
+      context.strokeStyle = '#132129';
+      context.lineWidth = 1;
+      context.stroke();
+    }
+
+    function commit(shapes, selected = -1) {
+      state.history.push(state.shapes);
+      if (state.history.length > 200) state.history.shift();
+      state.shapes = shapes;
+      state.selected = selected;
+      state.dirty = true;
+      updateShapeList();
+      updateUI();
+    }
+
+    function trimClosed(points) {
+      const first = points[0];
+      const last = points.at(-1);
+      return points.length > 1 && first[0] === last[0] && first[1] === last[1] ? points.slice(0, -1) : points;
+    }
+    function validPolygon(points) {
+      if (points.length < 3) return false;
+      const cross = ([ax, ay], [bx, by], [cx, cy]) => (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      const onLine = ([x, y], [ax, ay], [bx, by]) =>
+        x >= Math.min(ax, bx) && x <= Math.max(ax, bx) && y >= Math.min(ay, by) && y <= Math.max(ay, by);
+      const intersects = (a, b, c, d) => {
+        const [c1, c2, c3, c4] = [cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b)];
+        return (c1 * c2 < 0 && c3 * c4 < 0) ||
+          (c1 === 0 && onLine(c, a, b)) || (c2 === 0 && onLine(d, a, b)) ||
+          (c3 === 0 && onLine(a, c, d)) || (c4 === 0 && onLine(b, c, d));
+      };
+      let twiceArea = 0;
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i], b = points[(i + 1) % points.length];
+        if (a[0] === b[0] && a[1] === b[1]) return false;
+        twiceArea += a[0] * b[1] - a[1] * b[0];
+        for (let j = i + 2; j < points.length; j++) {
+          if (i === 0 && j === points.length - 1) continue;
+          if (intersects(a, b, points[j], points[(j + 1) % points.length])) return false;
+        }
+      }
+      return twiceArea !== 0;
+    }
+
+    function finishRegion() {
+      const points = trimClosed(state.draft);
+      if (points.length < 3) return;
+      if (!validPolygon(points)) {
+        status('Đường bao tự cắt hoặc không có diện tích. Hoàn tác rồi đặt lại đỉnh.', 'error');
+        return;
+      }
+      const shape = {label: labelSelect.value, points, flags: {machine_prediction: false, reviewed: true, expert_edited: true}};
+      state.draft = [];
+      commit([...state.shapes, shape], state.shapes.length);
+      status('Đã khép vùng ' + title(shape.label) + '.', 'ok');
+    }
+    function undo() {
+      if (state.draft.length) state.draft.pop();
+      else if (state.history.length) {
+        state.shapes = state.history.pop();
+        state.selected = -1;
+        state.dirty = true;
+        updateShapeList();
+      }
+      updateUI();
+      status('Đã hoàn tác thao tác trước.');
+    }
+    function cancelDraft() {
+      state.draft = [];
+      updateUI();
+      status('Đã hủy nét đang vẽ.');
+    }
+    function deleteRegion() {
+      if (state.selected < 0) return;
+      commit(state.shapes.filter((_, i) => i !== state.selected));
+      status('Đã xóa vùng. Có thể khôi phục bằng Hoàn tác.');
+    }
+    byId('finish').addEventListener('click', finishRegion);
+    byId('undo').addEventListener('click', undo);
+    byId('cancel').addEventListener('click', cancelDraft);
+    byId('delete').addEventListener('click', deleteRegion);
+    byId('reviewed').addEventListener('click', () => {
+      if (state.selected < 0) return;
+      commit(state.shapes.map((shape, index) => index === state.selected ?
+        {...shape, flags: {...shape.flags, reviewed: true}} : shape), state.selected);
+      status('Đã xác nhận rà soát vùng đang chọn.', 'ok');
+    });
+    byId('relabel').addEventListener('click', () => {
+      const shapes = state.shapes.map((shape, index) => {
+        if (index !== state.selected) return shape;
+        const edited = {...shape, label: labelSelect.value,
+          flags: {...shape.flags, reviewed: true, expert_edited: true}};
+        if ('class_id' in edited) edited.class_id = labelInfo(labelSelect.value).id;
+        if ('mean_confidence' in edited) {
+          edited.model_mean_confidence_before_edit = edited.mean_confidence;
+          delete edited.mean_confidence;
+        }
+        return edited;
+      });
+      commit(shapes, state.selected);
+      status('Đã đổi nhãn của vùng.', 'ok');
+    });
+
+    byId('save').addEventListener('click', () => {
+      const target = state.clean || state.ref;
+      const documentData = {
+        ...state.documentMeta,
+        version: '5.0.0',
+        flags: {...state.flags},
+        shapes: state.shapes.map((shape) => ({
+          group_id: null, description: '', ...shape, shape_type: 'polygon', flags: {...shape.flags}
+        })),
+        imagePath: target.name,
+        imageData: null,
+        imageHeight: target.height,
+        imageWidth: target.width
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(documentData, null, 2) + '\n'], {type: 'application/json'}));
+      const download = document.createElement('a');
+      download.href = url;
+      download.download = target.name.replace(/\.[^.]+$/, '') + '.json';
+      document.body.appendChild(download);
+      download.click();
+      download.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      state.dirty = false;
+      status(
+        state.clean ? 'Đã xuất ' + state.shapes.length + ' vùng cho ' + target.name + '.' :
+          'Đã xuất vùng theo ảnh tham chiếu. Khi huấn luyện, hãy ghép JSON với ảnh sạch cùng tọa độ và kích thước.',
+        'ok'
+      );
+    });
+
+    window.addEventListener('keydown', (event) => {
+      if (!hasImage() || state.loading || event.target.closest('input, select, button, textarea, [contenteditable]')) return;
+      if (event.code === 'Space') {
+        event.preventDefault();
+        state.space = true;
+        syncPan();
+      } else if (event.key === 'Enter' && state.draft.length >= 3) {
+        event.preventDefault();
+        finishRegion();
+      } else if (event.key === 'Escape' && state.draft.length) {
+        cancelDraft();
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' &&
+        (state.draft.length || state.history.length)) {
+        event.preventDefault();
+        undo();
+      }
+    });
+    function releaseSpace() {
+      if (!state.space) return;
+      state.space = false;
+      syncPan();
+    }
+    window.addEventListener('keyup', (event) => { if (event.code === 'Space') releaseSpace(); });
+    window.addEventListener('blur', releaseSpace);
+    window.addEventListener('beforeunload', (event) => {
+      if (needSave()) {
+        event.preventDefault();
+        event.returnValue = '';
+      }
+    });
+
+    populateLabels(DEFAULT_LABELS[1].name);
+  </script>
+</body>
+</html>

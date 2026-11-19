@@ -1,0 +1,36 @@
+{
+  "demo": true,
+  "notice": "Mô phỏng; một seed và ba ảnh test, không chứng minh chất lượng địa chấn thực.",
+  "dataset_sha256": "250946f2794e41e57a8bafd592d17a3a766977a96991209d1f204e21cdadf6cf",
+  "fixed_config": {
+    "seed": 42,
+    "width": 8,
+    "tile_size": 112,
+    "batch_size": 8,
+    "epochs": 12,
+    "patches_per_image": 10,
+    "lr": 0.003,
+    "boundary_weight": 1.0,
+    "sampling": "balanced"
+  },
+  "models": [
+    {
+      "name": "baseline",
+      "architecture": "unet",
+      "parameter_count": 122519,
+      "best_epoch": 12,
+      "validation_miou_union": 0.535889835993877,
+      "test_miou_union": 0.5323780153981317,
+      "metrics": "baseline/metrics.json"
+    },
+    {
+      "name": "attention",
+      "architecture": "attention_unet",
+      "parameter_count": 172398,
+      "best_epoch": 10,
+      "validation_miou_union": 0.7798085622114049,
+      "test_miou_union": 0.7831064186836887,
+      "metrics": "attention/metrics.json"
+    }
+  ]
+}
