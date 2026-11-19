@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 from zipfile import ZipFile
@@ -13,7 +14,7 @@ from facies.batch import process_folder
 from facies.data import Record, load_mask
 from facies.model import build_model
 from facies.predict import Predictor, configure_device, load_predictor, prediction_provenance
-from facies.render import export_results
+from facies.render import export_results, render_preview
 
 
 CLASSES = [
@@ -198,6 +199,44 @@ class InferenceUpgradeTests(unittest.TestCase):
                 self.assertIn("index.csv", bundle.namelist())
                 self.assertIn("index.json", bundle.namelist())
                 self.assertIn(result["results"][0]["paths"]["raw_mask"], bundle.namelist())
+
+    def test_preview_profile_is_lightweight_and_standard_skips_trace_assets(self):
+        image = np.full((220, 340, 3), 120, dtype=np.uint8)
+        mask = np.zeros((220, 340), dtype=np.uint8)
+        mask[10:210, 15:320] = 1
+        mask[90:108, 70:140] = 255
+        confidence = np.full(mask.shape, 0.72, dtype=np.float32)
+        entropy = np.full(mask.shape, 0.34, dtype=np.float32)
+        review = mask == 255
+        preview = render_preview(
+            image, mask, confidence, CLASSES, entropy=entropy, review_mask=review,
+            preview_max_side=96,
+        )
+        self.assertEqual(set(preview["files"]), {"overlay", "confidence", "review", "uncertainty"})
+        self.assertEqual(Image.open(BytesIO(preview["files"]["overlay"])).size, (96, 62))
+        self.assertEqual(preview["summary"]["width"], 340)
+        self.assertEqual(preview["summary"]["height"], 220)
+        self.assertAlmostEqual(preview["summary"]["review_fraction"], float(review.mean()))
+        with Image.open(BytesIO(preview["files"]["review"])) as preview_review:
+            self.assertEqual(set(np.unique(preview_review)), {0, 255})
+        with Image.open(BytesIO(preview["files"]["confidence"])) as preview_confidence:
+            self.assertEqual(preview_confidence.mode, "L")
+        with tempfile.TemporaryDirectory() as directory:
+            paths = export_results(
+                directory, image, mask, confidence, CLASSES, raw_mask=mask,
+                entropy=entropy, review_mask=review, profile="standard",
+            )
+            self.assertNotIn("source", paths)
+            self.assertNotIn("labelme", paths)
+            self.assertNotIn("trace", paths)
+            self.assertTrue(paths["overlay"].is_file())
+            self.assertTrue(paths["confidence"].is_file())
+            self.assertTrue(paths["uncertainty"].is_file())
+            with Image.open(paths["confidence"]) as exported_confidence:
+                self.assertEqual(exported_confidence.size, (340, 220))
+                np.testing.assert_allclose(np.array(exported_confidence) / 65535, confidence, atol=1/65535)
+            with Image.open(paths["mask"]) as exported_mask:
+                np.testing.assert_array_equal(np.array(exported_mask), mask)
 
 
 if __name__ == "__main__":

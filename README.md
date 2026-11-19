@@ -1,5 +1,19 @@
 # Phân vùng tướng địa chấn trên ảnh lát cắt
 
+Với một ảnh, chạy mô hình một lần rồi điều chỉnh ngưỡng rà soát, độ đậm lớp phủ hoặc diện tích vùng hiển thị ngay trên kết quả. Các điều chỉnh này không chạy lại mô hình; đổi ảnh, checkpoint hoặc thiết lập suy luận sẽ cần dự đoán lại. Bản xem trước có thể được thu nhỏ để hiển thị nhanh, còn các tệp xuất giữ kích thước gốc.
+
+Với cả thư mục, dùng `--profile standard` để xuất ảnh khoanh, mask, thống kê vùng và bản đồ điểm; dùng `--profile review` để có thêm ảnh nguồn và công cụ hiệu chỉnh. Khi tạo ZIP, `--zip-compression fast` ưu tiên thời gian, còn `compact` ưu tiên dung lượng.
+
+```powershell
+python -m facies.batch --model runs/attention/best.pt --input data/new-images --out runs/predictions --profile standard --zip runs/predictions.zip
+```
+
+Xem [phép đo hiệu suất CPU](docs/PERFORMANCE.md) để biết mức cải thiện và giới hạn của phép đo.
+
+Benchmark tại máy hiện tại: với ảnh mẫu, thời gian suy luận trung vị giảm từ 0,366 xuống 0,299 giây (~18%); lát cắt hẹp từ 0,410 xuống 0,317 giây (~23%); ảnh ghép lớn từ 2,325 xuống 2,231 giây (~4%). Mask giữ nguyên theo phép kiểm tra, confidence/entropy lệch tối đa dưới 0,000024 do sai số số thực khi đổi kích thước batch. Đây là phép đo CPU PyTorch 2.6 trên ảnh mô phỏng.
+
+Trên ảnh mẫu, gói rà soát đầy đủ mất 0,168 giây/1,77 MB; gói gọn 0,117 giây/1,01 MB; bản xem trước trong bộ nhớ 0,061 giây. Giao diện chỉ tạo tệp kích thước gốc sau khi bấm **Chuẩn bị tệp tải**.
+
 ## Bản nâng cấp
 
 Giao diện hiện gồm bốn khu vực: **Phân tướng một ảnh**, **Xử lý thư mục**, **Kiểm tra dữ liệu** và **Thí nghiệm**. Có bản đồ confidence/entropy, ngưỡng pixel cần rà soát, sửa polygon ngoại tuyến và đối chiếu số liệu giữa các lần huấn luyện. Chi tiết lựa chọn từ dự án tương tự nằm trong [ghi chú nghiên cứu](docs/RESEARCH.md); danh sách thay đổi ở [CHANGELOG.md](CHANGELOG.md).

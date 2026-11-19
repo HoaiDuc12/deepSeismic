@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import pickle
 import sys
+from itertools import islice, product
 from pathlib import Path
 
 import numpy as np
@@ -83,6 +84,25 @@ class Predictor:
         return {"mask": mask, "raw_mask": raw_mask, "confidence": confidence,
                 "entropy": entropy, "review_mask": review}
 
+    def _tile_probabilities(self, image, rows, cols, tile, batch_size, tta):
+        # Fill batches across row boundaries, including when the section is one tile wide.
+        positions = product(rows, cols)
+        while batch := list(islice(positions, batch_size)):
+            chips = np.stack([image[y:y + tile, x:x + tile] for y, x in batch])
+            chips *= 2.0
+            chips -= 1.0
+            tensor = torch.from_numpy(chips).permute(0, 3, 1, 2).to(self.device)
+            logits = self.model(tensor).float()
+            if self.active_channels is not None:
+                logits = logits[:, self.active_channels]
+            probabilities = logits.softmax(1)
+            if tta:
+                flipped = self.model(tensor.flip(-1)).float()
+                if self.active_channels is not None:
+                    flipped = flipped[:, self.active_channels]
+                probabilities.add_(flipped.softmax(1).flip(-1)).mul_(0.5)
+            yield from probabilities.cpu().numpy()
+
     @torch.inference_mode()
     def _predict(self, image, *, tile_size=None, overlap=None, batch_size=4,
                  tta=False, detailed=False):
@@ -117,29 +137,17 @@ class Predictor:
         mask = np.empty((height, width), dtype=np.uint8)
         confidence = np.empty((height, width), dtype=np.float32)
         entropy = np.empty((height, width), dtype=np.float32) if detailed else None
+        predictions = self._tile_probabilities(padded, rows, cols, tile, batch_size, tta)
         for row_index, y in enumerate(rows):
-            for start in range(0, len(cols), batch_size):
-                batch = cols[start:start + batch_size]
-                chips = np.stack([padded[y:y + tile, x:x + tile] for x in batch])
-                tensor = torch.from_numpy(normalize(chips)).permute(0, 3, 1, 2).to(self.device)
-                logits = self.model(tensor).float()
-                if self.active_channels is not None:
-                    logits = logits[:, self.active_channels]
-                probabilities = logits.softmax(1)
-                if tta:
-                    flipped = self.model(tensor.flip(-1)).float()
-                    if self.active_channels is not None:
-                        flipped = flipped[:, self.active_channels]
-                    probabilities.add_(flipped.softmax(1).flip(-1)).mul_(0.5)
-                probabilities = probabilities.cpu().numpy()
-                for x, probability in zip(batch, probabilities):
-                    votes[:, :, x:x + tile] += probability * window
-                    total[:, x:x + tile] += window
+            for x in cols:
+                votes[:, :, x:x + tile] += next(predictions) * window
+                total[:, x:x + tile] += window
             end = rows[row_index + 1] if row_index + 1 < len(rows) else height
             count = end - y
             completed = votes[:, :count, :width]
-            mask[y:end] = self.active_ids[completed.argmax(0)]
-            confidence[y:end] = completed.max(0) / total[:count, :width]
+            winners = completed.argmax(0)[None]
+            mask[y:end] = self.active_ids[winners[0]]
+            confidence[y:end] = np.take_along_axis(completed, winners, axis=0)[0] / total[:count, :width]
             if not np.isfinite(confidence[y:end]).all():
                 raise ValueError("Mô hình tạo xác suất không hữu hạn. Hãy kiểm tra checkpoint.")
             if detailed:

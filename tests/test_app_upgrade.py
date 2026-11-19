@@ -16,6 +16,7 @@ from streamlit.testing.v1 import AppTest
 import app
 from facies.data import load_classes
 from facies.model import UNet
+from facies.predict import Predictor
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -72,24 +73,38 @@ class AppUpgradeTests(unittest.TestCase):
             self.assertTrue(any("Chưa tìm thấy trọng số" in item.value for item in application.info))
             self.assertTrue(application.button(key="run_batch").disabled)
 
-    def test_threshold_and_tta_clear_stale_single_results(self):
-        with fixture_project():
+    def test_presentation_reuses_inference_and_keeps_exports_lazy(self):
+        with fixture_project(), patch.object(Predictor, "predict_detailed", autospec=True, side_effect=Predictor.predict_detailed) as infer:
             application = new_app()
             application.button(key="run_single").click().run(timeout=45)
             self.assert_clean(application)
-            self.assertGreaterEqual(len(application.get("download_button")), 10)
+            self.assertEqual(infer.call_count, 1)
+            self.assertFalse(application.get("download_button"))
             self.assertEqual(application.metric[2].value, "0.0%")
-            files = application.session_state["facies_result"][1]["files"]
+            application.button(key="prepare_exports").click().run(timeout=45)
+            self.assert_clean(application)
+            self.assertGreaterEqual(len(application.get("download_button")), 10)
+            files = application.session_state["single_exports"][1]["files"]
             self.assertTrue({"labelme", "trace", "raw_mask", "source", "confidence", "uncertainty", "review"}.issubset(files))
             application.slider(key="review_threshold").set_value(0.95).run()
             self.assertFalse(application.get("download_button"))
+            self.assertEqual(application.metric[2].value, "100.0%")
+            application.slider(key="overlay_alpha").set_value(0.5).run()
+            application.number_input(key="min_area").set_value(1000).run()
+            self.assertEqual(infer.call_count, 1)
+            application.button(key="prepare_exports").click().run(timeout=45)
+            self.assert_clean(application)
+            self.assertEqual(infer.call_count, 1)
+            mask_bytes = application.session_state["single_exports"][1]["files"]["mask"]
+            with Image.open(BytesIO(mask_bytes)) as mask:
+                self.assertTrue(np.all(np.asarray(mask) == 255))
             application.checkbox(key="use_tta").check().run()
+            self.assertFalse(application.metric)
+            self.assertFalse(application.get("download_button"))
             application.button(key="run_single").click().run(timeout=45)
             self.assert_clean(application)
             self.assertEqual(application.metric[2].value, "100.0%")
-            mask_bytes = application.session_state["facies_result"][1]["files"]["mask"]
-            with Image.open(BytesIO(mask_bytes)) as mask:
-                self.assertTrue(np.all(np.asarray(mask) == 255))
+            self.assertEqual(infer.call_count, 2)
 
     def test_batch_uses_new_directory_and_relative_preview_paths(self):
         with fixture_project() as root:
@@ -100,6 +115,7 @@ class AppUpgradeTests(unittest.TestCase):
             application = new_app()
             application.text_input(key="batch_source").set_value(str(images))
             application.text_input(key="batch_output").set_value(str(root / "batch"))
+            application.selectbox(key="batch_profile").select("review")
             application.button(key="run_batch").click().run(timeout=60)
             self.assert_clean(application)
             result = application.session_state["batch_result"][1]
@@ -220,8 +236,8 @@ class AppUpgradeTests(unittest.TestCase):
             application.radio(key="model_source").set_value(app.DEMO_MODE).run()
         application.button(key="run_single").click().run(timeout=120)
         self.assert_clean(application)
-        self.assertGreaterEqual(len(application.get("download_button")), 10)
-        result = application.session_state["facies_result"][1]
+        self.assertFalse(application.get("download_button"))
+        result = application.session_state["single_preview"][1]
         self.assertTrue(result["demo"])
         self.assertTrue(0 <= result["review_fraction"] <= 1)
 

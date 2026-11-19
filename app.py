@@ -28,7 +28,7 @@ LOG = logging.getLogger(__name__)
 
 HEADER = """
 <style>
-.stMainBlockContainer { max-width:1510px; padding-top:2.6rem; }
+.stMainBlockContainer { max-width:1600px; padding-top:2.2rem; }
 .facies-header {
  color:#f4fbfc; background:radial-gradient(ellipse at 90% 100%,#15665d,transparent 54%),#102c36;
  border-radius:16px; border-bottom:4px solid #47b9a2; padding:clamp(1.35rem,4vw,2.6rem); margin-bottom:.45rem;
@@ -40,6 +40,7 @@ HEADER = """
 [data-testid="stBaseButton-primary"] { background:#08796e; border-color:#08796e; }
 [data-testid="stBaseButton-primary"]:hover:not(:disabled) { background:#086559; border-color:#086559; }
 [data-testid="stImage"] img { border-radius:6px; }
+.workbench-label { font-size:.78rem; text-transform:uppercase; letter-spacing:.08em; color:#5d7075; font-weight:700; margin:.35rem 0 .2rem; }
 </style>
 <header class="facies-header">
 <h1>Phân tướng địa chấn</h1><p>Khoanh vùng, rà soát nhãn và theo dõi thí nghiệm trên ảnh lát cắt.</p>
@@ -117,31 +118,66 @@ def sidebar_settings() -> dict:
 
 
 def inference_signature(settings: dict) -> tuple:
-    return tuple(str(settings[k]) for k in ("checkpoint", "version", "device", "tile_size", "min_region_area", "alpha", "tta", "confidence_threshold"))
+    # Rendering controls are intentionally excluded: once prediction exists, changing
+    # threshold/opacity/area should not invoke the model again.
+    return tuple(str(settings[k]) for k in ("checkpoint", "version", "device", "tile_size", "tta"))
 
 
-def predict_section(image, checkpoint: Path, version, device, tile_size, min_region_area, alpha, *, tta=False, confidence_threshold=0.0, image_name="section.png"):
+def predict_section(image, checkpoint: Path, version, device, tile_size, *, tta=False):
     from facies.predict import prediction_provenance
-    from facies.render import export_results
 
-    start = perf_counter()
+    load_start = perf_counter()
     predictor = cached_predictor(str(checkpoint), version, device)
-    details = predictor.predict_detailed(image, tile_size=tile_size, batch_size=2, tta=tta, confidence_threshold=confidence_threshold)
-    provenance = prediction_provenance(checkpoint, predictor, tta=tta, confidence_threshold=confidence_threshold, tile_size=tile_size)
-    provenance["source_image"] = image_name
-    with TemporaryDirectory(prefix="facies_results_") as directory:
-        paths = export_results(
-            directory, image, details["mask"], details["confidence"], predictor.classes,
-            min_region_area=min_region_area, alpha=alpha, raw_mask=details["raw_mask"],
-            entropy=details["entropy"], review_mask=details["review_mask"], provenance=provenance,
-        )
-        files = {key: Path(path).read_bytes() for key, path in paths.items()}
-    return {
-        "files": files, "summary": json.loads(files["regions"]), "elapsed": perf_counter() - start,
-        "demo": bool(predictor.demo), "review_fraction": float(details["review_mask"].mean()),
-        "mean_confidence": float(details["confidence"].mean()), "mean_entropy": float(details["entropy"].mean()),
-        "threshold": confidence_threshold,
-    }
+    load_seconds = perf_counter() - load_start
+    start = perf_counter()
+    details = predictor.predict_detailed(image, tile_size=tile_size, batch_size=2, tta=tta, confidence_threshold=0.0)
+    inference_seconds = perf_counter() - start
+    provenance = prediction_provenance(checkpoint, predictor, tta=tta, confidence_threshold=0.0, tile_size=tile_size)
+    return {"raw_mask": details["raw_mask"], "confidence": details["confidence"],
+            "entropy": details["entropy"], "classes": predictor.classes,
+            "provenance": provenance, "demo": bool(predictor.demo),
+            "inference_seconds": inference_seconds, "model_load_seconds": load_seconds}
+
+
+def render_section(image, prediction, min_region_area, alpha, image_name, threshold, *, full=False):
+    """Build image previews or prepare full-resolution downloads without another inference."""
+    import numpy as np
+    from facies.render import export_results, render_preview
+
+    raw_mask, confidence = prediction["raw_mask"], prediction["confidence"]
+    review_mask = confidence < threshold
+    mask = np.where(review_mask, 255, raw_mask).astype(np.uint8)
+    provenance = {**prediction["provenance"], "source_image": image_name, "confidence_threshold": float(threshold)}
+    options = dict(min_region_area=min_region_area, alpha=alpha, raw_mask=raw_mask,
+                   entropy=prediction["entropy"], review_mask=review_mask, provenance=provenance)
+    args = image, mask, confidence, prediction["classes"]
+    started = perf_counter()
+    if full:
+        with TemporaryDirectory(prefix="facies_results_") as directory:
+            paths = export_results(directory, *args, **options)
+            files = {key: Path(path).read_bytes() for key, path in paths.items()}
+        result = {"files": files, "summary": json.loads(files["regions"])}
+    else:
+        result = render_preview(*args, **options, preview_max_side=1600)
+    summary = result["summary"]
+    return {**result, "demo": prediction["demo"], "elapsed": prediction["inference_seconds"],
+            "render_seconds": perf_counter() - started, "threshold": threshold,
+            "review_fraction": summary["review_fraction"], "mean_confidence": summary["mean_confidence"],
+            "mean_entropy": summary["mean_entropy"]}
+
+
+def image_preview(image, max_side=1600):
+    """Bound the browser payload while retaining the source for precise exports."""
+    import numpy as np
+    from PIL import Image
+
+    pixels = image if image.dtype == np.uint8 else np.rint(np.clip(image, 0, 1) * 255).astype(np.uint8)
+    preview = Image.fromarray(pixels)
+    if max_side:
+        preview.thumbnail((max_side, max_side), Image.Resampling.BILINEAR)
+    buffer = BytesIO()
+    preview.save(buffer, format="PNG", compress_level=1)
+    return buffer.getvalue()
 
 
 def map_preview(data: bytes):
@@ -156,33 +192,40 @@ def map_preview(data: bytes):
         return values.copy()
 
 
-def render_output(image, result, image_name: str, min_region_area: int) -> None:
+def render_output(image, result, min_region_area: int) -> None:
     summary, files = result["summary"], result["files"]
     classes = [x for x in summary["class_summary"] if x["pixel_count"] > 0]
     if result["demo"]:
         st.warning("Kết quả mô phỏng. Các điểm số từ dữ liệu mô phỏng không thể hiện chất lượng trên lát cắt thực.")
-    cols = st.columns(4)
-    cols[0].metric("Tướng dự đoán", len(classes), border=True)
-    cols[1].metric("Vùng được khoanh", summary["region_count"], border=True)
-    cols[2].metric("Pixel cần rà soát", f"{100 * result.get('review_fraction', 0):.1f}%", border=True)
-    cols[3].metric("Thời gian xử lý", f"{result['elapsed']:.1f} giây", border=True)
+    metrics = st.columns(2, gap="small")
+    metrics[0].metric("Tướng dự đoán", len(classes), border=True)
+    metrics[1].metric("Vùng được khoanh", summary["region_count"], border=True)
+    metrics = st.columns(2, gap="small")
+    metrics[0].metric("Pixel cần rà soát", f"{100 * result.get('review_fraction', 0):.1f}%", border=True)
+    metrics[1].metric("Độ tin cậy trung bình", f"{result['mean_confidence']:.2f}", border=True)
+    st.caption(f"Suy luận {result['elapsed']:.2f} giây · Cập nhật lớp phủ {result['render_seconds']:.2f} giây.")
     if result.get("review_fraction", 0) > 0:
         st.caption("Pixel dưới ngưỡng được bỏ trống trong mask đã lọc (mã 255); mask gốc vẫn có toàn bộ dự đoán.")
-    compare, uncertainty = st.tabs(["Ảnh và vùng tướng", "Độ tin cậy và rà soát"])
-    with compare:
-        a, b = st.columns(2)
-        a.image(image, caption="Lát cắt đầu vào", width="stretch")
-        b.image(files["overlay"], caption="Vùng tướng dự đoán", width="stretch")
-        with st.expander("Xem ảnh khoanh vùng toàn chiều rộng"):
-            st.image(files["overlay"], width="stretch")
-    with uncertainty:
-        st.caption("Đây là tín hiệu từ mô hình để ưu tiên kiểm tra; không thay thế đánh giá địa chất của chuyên gia. Bản đồ xám: đen gần 0, trắng gần 1; bản đồ rà soát: trắng là pixel dưới ngưỡng.")
-        for panel, key, label in zip(st.columns(3), ("confidence", "uncertainty", "review"), ("Xác suất cao nhất theo pixel", "Độ bất định (entropy chuẩn hóa)", "Pixel cần chuyên gia rà soát")):
-            if key in files:
-                panel.image(map_preview(files[key]), caption=label, width="stretch")
-        if "mean_confidence" in result:
-            st.caption(f"Xác suất trung bình: {result['mean_confidence']:.3f} · Entropy trung bình: {result['mean_entropy']:.3f} · Ngưỡng rà soát: {result['threshold']:.2f}")
-    st.subheader("Tải kết quả")
+    display = st.radio("Lớp xem", ("Khoanh vùng", "Đối chiếu", "Xác suất", "Bất định", "Cần rà soát"), horizontal=True, key="single_view")
+    if display == "Đối chiếu":
+        ext, overlay = st.columns(2)
+        ext.image(image, caption="Lát cắt đầu vào", width="stretch")
+        overlay.image(files["overlay"], caption="Vùng tướng dự đoán", width="stretch")
+    elif display == "Khoanh vùng":
+        st.image(files["overlay"], width="stretch")
+    else:
+        key = {"Xác suất": "confidence", "Bất định": "uncertainty", "Cần rà soát": "review"}[display]
+        if key in files:
+            st.image(files[key], width="stretch")
+        st.caption("Đen gần 0, trắng gần 1. Với bản đồ rà soát, trắng là pixel dưới ngưỡng. Đây là tín hiệu từ mô hình, chưa được hiệu chuẩn thành độ chính xác địa chất.")
+    if classes:
+        with st.expander("Thống kê theo tướng"):
+            st.dataframe([{"Tướng": x["name"], "Mã": x["class_id"], "Tỷ lệ ảnh (%)": 100 * x["area_fraction"], "Vùng được khoanh": x["region_count"]} for x in sorted(classes, key=lambda x: -x["pixel_count"])], hide_index=True, width="stretch", column_config={"Tỷ lệ ảnh (%)": st.column_config.NumberColumn(format="%.2f")})
+    st.caption(f"Xem trước · Vùng hiển thị từ {min_region_area:,} pixel · Tái dựng lớp phủ {result['render_seconds']:.2f} giây. Tệp tải giữ kích thước ảnh gốc.")
+
+
+def render_downloads(result, image_name):
+    summary, files = result["summary"], result["files"]
     name = Path(image_name).stem
     for column, key, label, suffix, mime in zip(st.columns(3), ("overlay", "mask", "regions"), ("Ảnh khoanh vùng", "Mask đã lọc", "Danh sách vùng"), ("khoanh-vung.png", "mask.png", "vung.json"), ("image/png", "image/png", "application/json")):
         column.download_button(label, files[key], file_name=f"{name}-{suffix}", mime=mime, width="stretch", on_click="ignore", key=f"single_dl_{key}")
@@ -204,56 +247,98 @@ def render_output(image, result, image_name: str, min_region_area: int) -> None:
         for i, (key, (label, suffix, mime)) in enumerate(extra.items()):
             if key in files:
                 cols[i % 2].download_button(label, files[key], file_name="source.png" if key == "source" else f"{name}-{suffix}", mime=mime, on_click="ignore", key=f"single_dl_{key}")
-    if classes:
-        st.subheader("Thống kê theo tướng")
-        st.dataframe([{"Tướng": x["name"], "Mã": x["class_id"], "Tỷ lệ ảnh (%)": 100 * x["area_fraction"], "Vùng được khoanh": x["region_count"]} for x in sorted(classes, key=lambda x: -x["pixel_count"])], hide_index=True, width="stretch", column_config={"Tỷ lệ ảnh (%)": st.column_config.NumberColumn(format="%.2f")})
-    st.caption(f"Chỉ hiển thị vùng từ {min_region_area:,} pixel. Diện tích tính theo pixel ảnh, chưa quy đổi sang khoảng cách hoặc chiều sâu.")
 
 
 def single_workspace(settings: dict):
-    st.subheader("Ảnh lát cắt")
-    use_sample = settings["mode"] == DEMO_MODE and st.checkbox("Dùng ảnh lát cắt mô phỏng có sẵn", value=True, key="single_sample")
-    if use_sample:
-        try:
-            image_bytes, image_name = DEMO_IMAGE.read_bytes(), DEMO_IMAGE.name
-        except OSError as exc:
-            st.error(f"Không đọc được ảnh mô phỏng. {exc}")
-            return
-    else:
-        uploaded = st.file_uploader("Chọn ảnh gốc chưa khoanh vùng", type=["png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"], key="single_image")
-        image_bytes, image_name = (uploaded.getvalue(), uploaded.name) if uploaded else (None, "")
+    st.subheader("Không gian làm việc")
+    left, right = st.columns([1.55, 1], gap="large")
+    with right:
+        st.markdown('<div class="workbench-label">Nguồn lát cắt</div>', unsafe_allow_html=True)
+        use_sample = settings["mode"] == DEMO_MODE and st.checkbox("Dùng ảnh mẫu mô phỏng", value=True, key="single_sample")
+        uploaded = None if use_sample else st.file_uploader("Chọn ảnh gốc chưa khoanh vùng", type=["png", "jpg", "jpeg", "tif", "tiff", "bmp", "webp"], key="single_image")
+        if use_sample:
+            try:
+                image_bytes, image_name = DEMO_IMAGE.read_bytes(), DEMO_IMAGE.name
+            except OSError as exc:
+                st.error(f"Không đọc được ảnh mô phỏng. {exc}")
+                return
+        else:
+            image_bytes, image_name = (uploaded.getvalue(), uploaded.name) if uploaded else (None, "")
+        st.markdown('<div class="workbench-label">Thiết lập lớp phủ</div>', unsafe_allow_html=True)
+        st.caption("Đổi ngưỡng rà soát, diện tích và độ đậm màu ở thanh bên. Kết quả cập nhật mà không chạy lại mô hình.")
     if image_bytes is None:
         if settings["version"] is None:
             show_training_help()
         return
     from facies.data import load_image
+    image_key = hashlib.sha256(image_bytes).digest()
+    source_cache = st.session_state.get("single_source")
     try:
-        image = load_image(BytesIO(image_bytes))
+        if source_cache is None or source_cache[0] != image_key:
+            image = load_image(BytesIO(image_bytes))
+            source_cache = image_key, image, image_preview(image)
+            st.session_state["single_source"] = source_cache
+        else:
+            image = source_cache[1]
     except (OSError, ValueError) as exc:
         st.error(f"Không đọc được ảnh lát cắt. {exc}")
         return
     h, w = image.shape[:2]
-    st.caption(f"{image_name} · {w:,} × {h:,} pixel")
+    left.caption(f"{image_name} · {w:,} × {h:,} pixel gốc")
     if settings["version"] is None:
         show_training_help()
-        st.image(image, width="stretch")
+        left.image(source_cache[2], width="stretch")
         return
-    signature = hashlib.sha256(image_bytes).digest(), inference_signature(settings)
-    if st.button("Chạy phân tướng", type="primary", key="run_single"):
-        st.session_state.pop("facies_result", None)
+    signature = image_key, inference_signature(settings)
+    controls_signature = (settings["min_region_area"], settings["alpha"], image_name, settings["confidence_threshold"])
+    with right:
+        run_clicked = st.button("Chạy phân tướng", type="primary", key="run_single", width="stretch")
+        st.caption("Chỉ cần chạy lại khi đổi ảnh, mô hình hoặc tùy chọn suy luận.")
+    if run_clicked:
+        for key in ("facies_result", "single_preview", "single_exports"):
+            st.session_state.pop(key, None)
         with st.spinner("Đang phân tướng và lập bản đồ rà soát…", show_time=True):
             try:
-                result = predict_section(image, **{k: v for k, v in settings.items() if k != "mode"}, image_name=image_name)
+                prediction = predict_section(image, **{key: settings[key] for key in ("checkpoint", "version", "device", "tile_size", "tta")})
             except Exception as exc:
                 LOG.exception("Single inference failed")
                 st.error(f"Không hoàn tất phân tướng. {exc}")
             else:
-                st.session_state["facies_result"] = signature, result
+                st.session_state["facies_result"] = signature, prediction
     previous = st.session_state.get("facies_result")
-    if previous and previous[0] == signature:
-        render_output(image, previous[1], image_name, settings["min_region_area"])
-    else:
-        st.image(image, width="stretch")
+    if not previous or previous[0] != signature:
+        left.image(source_cache[2], caption="Ảnh gốc · xem trước", width="stretch")
+        return
+    render_key = signature, controls_signature
+    preview = st.session_state.get("single_preview")
+    if not preview or preview[0] != render_key:
+        st.session_state.pop("single_exports", None)
+        try:
+            with st.spinner("Đang cập nhật lớp phủ…", show_time=True):
+                preview = render_key, render_section(image, previous[1], *controls_signature)
+        except Exception as exc:
+            LOG.exception("Preview rendering failed")
+            st.error(f"Không dựng được lớp phủ. {exc}")
+            return
+        st.session_state["single_preview"] = preview
+    with left:
+        render_output(source_cache[2], preview[1], settings["min_region_area"])
+    with right:
+        st.markdown('<div class="workbench-label">Xuất tệp</div>', unsafe_allow_html=True)
+        st.caption("Tạo ảnh, mask và nhãn ở kích thước pixel gốc khi cần tải về.")
+        if st.button("Chuẩn bị tệp tải", key="prepare_exports", width="stretch"):
+            st.session_state.pop("single_exports", None)
+            with st.spinner("Đang chuẩn bị tệp ở kích thước gốc…", show_time=True):
+                try:
+                    ready = render_section(image, previous[1], *controls_signature, full=True)
+                except Exception as exc:
+                    LOG.exception("Full-resolution export failed")
+                    st.error(f"Không tạo được tệp tải. {exc}")
+                else:
+                    st.session_state["single_exports"] = render_key, ready
+        exports = st.session_state.get("single_exports")
+        if exports and exports[0] == render_key:
+            render_downloads(exports[1], image_name)
 
 
 def batch_workspace(settings: dict):
@@ -262,7 +347,8 @@ def batch_workspace(settings: dict):
     source_value = st.text_input("Thư mục ảnh sạch", value="data/images", key="batch_source")
     output_value = st.text_input("Thư mục lưu các lần xử lý", value="runs/batch", key="batch_output")
     recursive = st.checkbox("Đọc cả thư mục con", value=False, key="batch_recursive")
-    signature = source_value, output_value, recursive, inference_signature(settings)
+    profile = st.selectbox("Gói xuất thư mục", ("standard", "review"), format_func=lambda value: {"standard": "Gọn · ảnh, mask và bản đồ", "review": "Rà soát · thêm LabelMe và HTML"}[value], key="batch_profile")
+    signature = (source_value, output_value, recursive, profile, inference_signature(settings), settings["confidence_threshold"], settings["alpha"], settings["min_region_area"])
     if settings["version"] is None:
         st.info("Chọn tệp trọng số hợp lệ trong thanh bên để xử lý thư mục.")
     if st.button("Chạy cả thư mục", type="primary", disabled=settings["version"] is None, key="run_batch"):
@@ -281,7 +367,7 @@ def batch_workspace(settings: dict):
                 settings["checkpoint"], source, target, recursive=recursive,
                 device=default_device() if settings["device"] == "Tự động" else "cpu", tile_size=settings["tile_size"],
                 tta=settings["tta"], confidence_threshold=settings["confidence_threshold"],
-                min_region_area=settings["min_region_area"], alpha=settings["alpha"], batch_size=2,
+                min_region_area=settings["min_region_area"], alpha=settings["alpha"], batch_size=2, profile=profile,
                 progress=lambda done, total, name: bar.progress(done / max(total, 1), text=f"{done}/{total} · {name}"),
             )
         except Exception as exc:

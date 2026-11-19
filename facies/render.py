@@ -7,6 +7,7 @@ import os
 import base64
 from io import BytesIO
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -15,6 +16,7 @@ import numpy as np
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 
+@lru_cache(maxsize=16)
 def _font(size):
     windows = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
     for path in (
@@ -35,6 +37,38 @@ def _font(size):
 def _latin_name(name):
     text = name.replace("đ", "d").replace("Đ", "D")
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
+
+def _polygon_omission(item, region_id, x, y, w, h, area, reason):
+    return {"region_id": int(region_id), "class_id": int(item["id"]), "name": str(item["name"]),
+            "pixel_count": int(area), "bbox_xyxy": [int(x), int(y), int(x + w), int(y + h)], "reason": reason}
+
+
+def _add_polygon(annotation, item, component, region_id, x, y, w, h, area, score):
+    contours, hierarchy = cv2.findContours(component.astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    omitted = _polygon_omission(item, region_id, x, y, w, h, area, "holes_or_multiple_contours_not_representable")
+    if hierarchy is None or len(contours) != 1 or hierarchy[0, 0, 2] != -1:
+        annotation["_facies"]["omitted_regions"].append(omitted)
+        return
+    points = contours[0][:, 0, :]
+    if len(points) < 3 or cv2.contourArea(points) == 0:
+        omitted["reason"] = "degenerate_contour"
+        annotation["_facies"]["omitted_regions"].append(omitted)
+        return
+    # PIL matches the loader; only export polygons that round-trip exactly.
+    raster = Image.new("L", (w, h))
+    ImageDraw.Draw(raster).polygon([tuple(map(int, p)) for p in points], fill=1)
+    if not np.array_equal(np.asarray(raster), component):
+        omitted["reason"] = "polygon_does_not_reproduce_pixel_region"
+        annotation["_facies"]["omitted_regions"].append(omitted)
+        return
+    annotation["shapes"].append({
+        "label": item["name"], "class_id": item["id"], "points": (points + np.array([x, y])).tolist(),
+        "group_id": int(region_id), "shape_type": "polygon",
+        "flags": {"machine_prediction": True, "reviewed": False},
+        "description": f"Model probability {score:.4f}; uncalibrated; requires expert review.",
+        "mean_confidence": score,
+    })
 
 
 def _region_anchor(component, left, top):
@@ -117,6 +151,11 @@ def render_overlay(image, mask, confidence, classes, *, min_region_area=64, alph
     Area fractions are relative to the whole section. The region cutoff affects the
     overlay and region list. Class pixel counts and mean scores use the full ID mask.
     """
+    return _render_regions(image, mask, confidence, classes, min_region_area=min_region_area, alpha=alpha)
+
+
+def _render_regions(image, mask, confidence, classes, *, min_region_area, alpha,
+                    entropy=None, annotation=None):
     image, mask, confidence = map(np.asarray, (image, mask, confidence))
     if (mask.ndim != 2 or not mask.size or image.shape != (*mask.shape, 3)
             or confidence.shape != mask.shape):
@@ -141,6 +180,7 @@ def render_overlay(image, mask, confidence, classes, *, min_region_area=64, alph
     levels = np.arange(256, dtype=np.float32)[:, None]
     channels = np.arange(3)
     regions, class_summary = [], []
+    polygon_offset = 0
     for item in classes:
         class_id = int(item["id"])
         if class_id in (0, 255):
@@ -160,6 +200,12 @@ def render_overlay(image, mask, confidence, classes, *, min_region_area=64, alph
             keep[0] = False
             retained = np.flatnonzero(keep)
             retained_count = len(retained)
+            if annotation is not None:
+                for index in np.flatnonzero(~keep[1:]) + 1:
+                    x, y, w, h, area = map(int, stats[index])
+                    annotation["_facies"]["omitted_regions"].append(_polygon_omission(
+                        item, polygon_offset + int(index), x, y, w, h, area, "below_min_region_area",
+                    ))
             if retained_count:
                 display = keep[components]
                 blend = np.rint((1 - alpha) * levels + alpha * np.array(rgb)).astype(np.uint8)
@@ -171,7 +217,8 @@ def render_overlay(image, mask, confidence, classes, *, min_region_area=64, alph
                 x, y, w, h, area = map(int, stats[index])
                 box = np.s_[y:y + h, x:x + w]
                 region = components[box] == index
-                regions.append({
+                mean_confidence = float(np.mean(confidence[box][region]))
+                result = {
                     "region_id": len(regions) + 1,
                     "class_id": class_id,
                     "name": name,
@@ -180,8 +227,15 @@ def render_overlay(image, mask, confidence, classes, *, min_region_area=64, alph
                     "bbox_xyxy": [x, y, x + w, y + h],
                     "label_xy": _region_anchor(region, x, y),
                     "label_bbox_xyxy": None,
-                    "mean_confidence": float(np.mean(confidence[box][region])),
-                })
+                    "mean_confidence": mean_confidence,
+                }
+                if entropy is not None:
+                    result["mean_entropy"] = float(entropy[box][region].mean())
+                regions.append(result)
+                if annotation is not None:
+                    _add_polygon(annotation, item, region, polygon_offset + int(index),
+                                 x, y, w, h, area, mean_confidence)
+            polygon_offset += len(stats) - 1
         class_summary.append({
             "class_id": class_id,
             "name": name,
@@ -217,15 +271,22 @@ def _checked_map(values, shape, name, *, boolean=False):
     return values
 
 
-def labelme_prediction(mask, confidence, classes, *, min_region_area=64):
-    """Export supported polygons without flattening holes into a solid region.
+def _annotation_document(height, width):
+    return {
+        "version": "5.5.0", "flags": {"machine_prediction": True}, "shapes": [],
+        "imagePath": "source.png", "imageData": None, "imageHeight": height, "imageWidth": width,
+        "_facies": {
+            "requires_expert_review": True,
+            "confidence_is_calibrated": False,
+            "unassigned_pixels": "Remain unannotated (ID 255 on re-import); never infer background.",
+            "omitted_regions": [],
+        },
+    }
 
-    LabelMe has no standard subtractive-polygon semantics. Components with holes,
-    degenerate contours, or any failed exact rasterization check are omitted and
-    explicitly reported. The pixel mask remains the authoritative prediction.
-    """
-    height, width = mask.shape
-    shapes, omissions = [], []
+
+def labelme_prediction(mask, confidence, classes, *, min_region_area=64):
+    """Export exact LabelMe polygons, with omissions for unrepresentable regions."""
+    annotation = _annotation_document(*mask.shape)
     region_number = 0
     for item in classes:
         if item["id"] in (0, 255):
@@ -236,70 +297,90 @@ def labelme_prediction(mask, confidence, classes, *, min_region_area=64):
         for index in range(1, len(stats)):
             x, y, w, h, area = map(int, stats[index])
             region_number += 1
-            omitted = {"region_id": region_number, "class_id": item["id"],
-                       "name": item["name"], "pixel_count": area, "bbox_xyxy": [x, y, x + w, y + h]}
             if area < min_region_area:
-                omissions.append({**omitted, "reason": "below_min_region_area"})
+                annotation["_facies"]["omitted_regions"].append(_polygon_omission(
+                    item, region_number, x, y, w, h, area, "below_min_region_area",
+                ))
                 continue
-            component = (labels[y:y + h, x:x + w] == index).astype(np.uint8)
-            contours, hierarchy = cv2.findContours(component, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-            if hierarchy is None or len(contours) != 1 or hierarchy[0, 0, 2] != -1:
-                omissions.append({**omitted, "reason": "holes_or_multiple_contours_not_representable"})
-                continue
-            points = contours[0][:, 0, :]
-            if len(points) < 3 or cv2.contourArea(points) == 0:
-                omissions.append({**omitted, "reason": "degenerate_contour"})
-                continue
-            # PIL is also used by the loader; prove the polygon round-trips exactly.
-            raster = Image.new("L", (w, h))
-            ImageDraw.Draw(raster).polygon([tuple(map(int, point)) for point in points], fill=1)
-            if not np.array_equal(np.asarray(raster), component):
-                omissions.append({**omitted, "reason": "polygon_does_not_reproduce_pixel_region"})
-                continue
-            score = float(confidence[y:y + h, x:x + w][component.astype(bool)].mean())
-            shapes.append({
-                "label": item["name"], "class_id": item["id"],
-                "points": (points + np.array([x, y])).tolist(),
-                "group_id": region_number, "shape_type": "polygon",
-                "flags": {"machine_prediction": True, "reviewed": False},
-                "description": f"Model probability {score:.4f}; uncalibrated; requires expert review.",
-                "mean_confidence": score,
-            })
-    return {
-        "version": "5.5.0", "flags": {"machine_prediction": True}, "shapes": shapes,
-        "imagePath": "source.png", "imageData": None, "imageHeight": height, "imageWidth": width,
-        "_facies": {
-            "requires_expert_review": True,
-            "confidence_is_calibrated": False,
-            "unassigned_pixels": "Remain unannotated (ID 255 on re-import); never infer background.",
-            "omitted_regions": omissions,
-        },
-    }
+            component = labels[y:y + h, x:x + w] == index
+            score = float(confidence[y:y + h, x:x + w][component].mean())
+            _add_polygon(annotation, item, component, region_number, x, y, w, h, area, score)
+    return annotation
 
 
-def _trace_page(source, annotation, classes):
-    buffer = BytesIO()
-    source.save(buffer, format="PNG")
+def _trace_page(source_bytes, annotation, classes):
     payload = {"annotation": annotation, "classes": classes,
-               "source": "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")}
+               "source": "data:image/png;base64," + base64.b64encode(source_bytes).decode("ascii")}
     safe = json.dumps(payload, ensure_ascii=False).replace("<", "\\u003c").replace(
         ">", "\\u003e").replace("&", "\\u0026")
     return _TRACE_HTML.replace("__PAYLOAD__", safe)
 
 
+def render_preview(image, mask, confidence, classes, *, min_region_area=64, alpha=0.27,
+                   raw_mask=None, entropy=None, review_mask=None, provenance=None,
+                   preview_max_side=1600):
+    """Build lightweight in-memory preview files without HTML or polygon packaging.
+
+    The summary and review fractions are computed at native resolution. PNG preview
+    images are resized only after rendering and use 8-bit grayscale score maps.
+    """
+    image = np.asarray(image)
+    mask = np.asarray(mask)
+    confidence = np.asarray(confidence)
+    review = mask == 255 if review_mask is None else _checked_map(review_mask, mask.shape, "Bản đồ xem lại", boolean=True)
+    entropy_values = None if entropy is None or not mask.size else _checked_map(entropy, mask.shape, "Entropy")
+    overlay, metadata = _render_regions(
+        image, mask, confidence, classes, min_region_area=min_region_area, alpha=alpha,
+        entropy=entropy_values,
+    )
+    metadata.update({
+        "mean_confidence": float(confidence.mean()),
+        "mean_entropy": None if entropy_values is None else float(entropy_values.mean()),
+        "review_pixel_count": int(review.sum()), "review_fraction": float(review.mean()),
+        "accepted_fraction": float((mask != 255).mean()), "confidence_is_calibrated": False,
+        "provenance": {} if provenance is None else provenance,
+    })
+    h, w = mask.shape
+    if preview_max_side is not None and (type(preview_max_side) is not int or preview_max_side < 1):
+        raise ValueError("Kích thước tối đa của ảnh xem trước phải là số nguyên dương hoặc None.")
+    scale = 1.0 if preview_max_side is None else min(1.0, float(preview_max_side) / max(h, w))
+    size = (max(1, round(w * scale)), max(1, round(h * scale)))
+    def encode(picture, resample):
+        if size != picture.size:
+            picture = picture.resize(size, resample=resample)
+        out = BytesIO()
+        picture.save(out, format="PNG", compress_level=1)
+        return out.getvalue()
+    files = {"overlay": encode(overlay, Image.Resampling.BILINEAR),
+             "confidence": encode(Image.fromarray(np.rint(confidence * 255).astype(np.uint8)), Image.Resampling.BILINEAR),
+             "review": encode(Image.fromarray(review.astype(np.uint8) * 255), Image.Resampling.NEAREST)}
+    if entropy_values is not None:
+        files["uncertainty"] = encode(Image.fromarray(np.rint(entropy_values * 255).astype(np.uint8)), Image.Resampling.BILINEAR)
+    return {"files": files, "summary": metadata}
+
+
 def export_results(out_dir, image, mask, confidence, classes, *, min_region_area=64, alpha=0.27,
                    raw_mask=None, entropy=None, review_mask=None, provenance=None,
-                   export_labelme=True):
+                   export_labelme=True, profile="full"):
     """Save native-size masks, score maps and reviewable machine annotations.
 
     The supplied thresholded mask is saved verbatim, including ID 255. Neither it
     nor raw_mask is modified by visualization, filtering or polygon extraction.
     Confidence/entropy PNGs are 16-bit values scaled by 65535 (not RGB heatmaps).
+    ``profile="standard"`` omits the source image, LabelMe JSON and trace editor.
+    ``profile="review"`` aliases the default ``"full"`` review package.
     """
-    overlay, metadata = render_overlay(
-        image, mask, confidence, classes, min_region_area=min_region_area, alpha=alpha
-    )
+    if profile not in {"full", "review", "standard"}:
+        raise ValueError("profile phải là full, review hoặc standard. Dùng render_preview để xem trước.")
+    if profile == "review":
+        profile = "full"
     mask, confidence = np.asarray(mask), np.asarray(confidence)
+    annotation = _annotation_document(*mask.shape) if mask.ndim == 2 and export_labelme and profile == "full" else None
+    entropy = None if entropy is None or not mask.size else _checked_map(entropy, mask.shape, "Entropy")
+    overlay, metadata = _render_regions(
+        image, mask, confidence, classes, min_region_area=min_region_area, alpha=alpha,
+        entropy=entropy, annotation=annotation,
+    )
     raw = mask if raw_mask is None else np.asarray(raw_mask)
     valid_ids = {int(item["id"]) for item in classes} | {255}
     if raw.shape != mask.shape or raw.dtype.kind not in "iu" or not set(np.unique(raw)) <= valid_ids:
@@ -311,7 +392,6 @@ def export_results(out_dir, image, mask, confidence, classes, *, min_region_area
         raise ValueError("Mask chỉ được khác raw_mask tại pixel 255 có đánh dấu xem lại.")
     if np.any((mask == 255) & ~review):
         raise ValueError("Pixel 255 cần được đánh dấu trong bản đồ xem lại.")
-    entropy = None if entropy is None else _checked_map(entropy, mask.shape, "Entropy")
     metadata.update({
         "mean_confidence": float(confidence.mean()),
         "mean_entropy": None if entropy is None else float(entropy.mean()),
@@ -332,23 +412,9 @@ def export_results(out_dir, image, mask, confidence, classes, *, min_region_area
             "raw_mean_confidence": float(confidence[selected].mean()) if count else None,
             "raw_mean_entropy": float(entropy[selected].mean()) if count and entropy is not None else None,
         })
-    # Per-region scores can be computed from existing bboxes without full label maps.
-    if entropy is not None:
-        for region in metadata["regions"]:
-            x1, y1, x2, y2 = region["bbox_xyxy"]
-            box = np.s_[y1:y2, x1:x2]
-            # Distinguish adjacent components that happen to share a bounding box.
-            local = (mask[box] == region["class_id"]).astype(np.uint8)
-            _, labels = cv2.connectedComponents(local, connectivity=8)
-            ax, ay = region["label_xy"]
-            component = labels == labels[ay - y1, ax - x1]
-            region["mean_entropy"] = float(entropy[box][component].mean())
-
-    values = np.asarray(image)
-    source = Image.fromarray(values if values.dtype == np.uint8 else np.rint(values * 255).astype(np.uint8))
-    annotation = labelme_prediction(mask, confidence, classes, min_region_area=min_region_area) if export_labelme else None
     if annotation is not None:
         annotation["_facies"]["provenance"] = metadata["provenance"]
+        annotation["_facies"]["omitted_regions"].sort(key=lambda row: row["region_id"])
         metadata["labelme"] = {"exported_polygon_count": len(annotation["shapes"]),
                                "omitted_regions": annotation["_facies"]["omitted_regions"]}
     out_dir = Path(out_dir)
@@ -367,6 +433,10 @@ def export_results(out_dir, image, mask, confidence, classes, *, min_region_area
         paths["uncertainty"] = out_dir / "uncertainty.png"
     if annotation is not None:
         paths.update(labelme=out_dir / "labelme.json", trace=out_dir / "trace.html")
+    if profile == "standard":
+        paths.pop("source", None)
+        paths.pop("labelme", None)
+        paths.pop("trace", None)
     # Encode all files before replacing any existing result. Each replacement is atomic.
     with TemporaryDirectory(prefix=".render-", dir=out_dir) as work_dir:
         staged = {key: Path(work_dir) / path.name for key, path in paths.items()}
@@ -374,14 +444,17 @@ def export_results(out_dir, image, mask, confidence, classes, *, min_region_area
         Image.fromarray(np.asarray(mask, dtype=np.uint8)).save(staged["mask"])
         Image.fromarray(np.rint(confidence * 65535).astype(np.uint16)).save(staged["confidence"])
         Image.fromarray(review.astype(np.uint8) * 255).save(staged["review"])
-        source.save(staged["source"])
+        if "source" in staged:
+            values = np.asarray(image)
+            source = Image.fromarray(values if values.dtype == np.uint8 else np.rint(values * 255).astype(np.uint8))
+            source.save(staged["source"])
         if raw_mask is not None:
             Image.fromarray(raw.astype(np.uint8)).save(staged["raw_mask"])
         if entropy is not None:
             Image.fromarray(np.rint(entropy * 65535).astype(np.uint16)).save(staged["uncertainty"])
         if annotation is not None:
             staged["labelme"].write_text(json.dumps(annotation, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            staged["trace"].write_text(_trace_page(source, annotation, classes), encoding="utf-8")
+            staged["trace"].write_text(_trace_page(staged["source"].read_bytes(), annotation, classes), encoding="utf-8")
         staged["regions"].write_text(
             json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )

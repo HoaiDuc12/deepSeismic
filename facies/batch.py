@@ -10,6 +10,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from .data import load_image
@@ -18,18 +19,21 @@ from .render import export_results
 
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+EXPORT_PROFILES = ("review", "standard")
+ZIP_LEVELS = {"fast": 1, "compact": 9}
 
 
 def process_folder(model_path, input_dir, out_dir, *, recursive=False, device=None,
                    tile_size=None, overlap=None, batch_size=4, tta=False,
                    confidence_threshold=0.0, min_region_area=64, alpha=0.27,
-                   zip_path=None, progress=None):
+                   profile="review", zip_path=None, zip_compression="fast", progress=None):
     """Process images one at a time and rank them with an explicit review heuristic.
 
     Ranking is 0.6 * review pixel fraction + 0.4 * mean normalized entropy.
     It estimates review priority, not error probability or geological accuracy.
     Files are loaded once in deterministic relative-path order. Output subtrees
     under the input folder are excluded. Per-image failures stay in both indices.
+    The review profile includes editable annotations; standard omits that package.
     ``progress(done, total, source_relative)`` is called after each attempted image.
     """
     input_dir, out_dir = Path(input_dir).resolve(), Path(out_dir).resolve()
@@ -39,6 +43,10 @@ def process_folder(model_path, input_dir, out_dir, *, recursive=False, device=No
         raise ValueError("Thư mục kết quả phải tách khỏi thư mục ảnh hoặc là thư mục con riêng.")
     if batch_size < 1 or min_region_area < 1 or not 0 <= alpha <= 1:
         raise ValueError("Batch và diện tích phải ≥1, alpha thuộc [0, 1].")
+    if profile not in EXPORT_PROFILES:
+        raise ValueError("Kiểu xuất cần là review hoặc standard.")
+    if zip_compression not in ZIP_LEVELS:
+        raise ValueError("Mức nén ZIP cần là fast hoặc compact.")
     archive = None if zip_path is None else Path(zip_path).resolve()
     if archive is not None:
         if archive.suffix.lower() != ".zip":
@@ -59,6 +67,7 @@ def process_folder(model_path, input_dir, out_dir, *, recursive=False, device=No
     )
     validate_tiles(provenance["tile_size"], provenance["overlap"])
     provenance["created_utc"] = datetime.now(timezone.utc).isoformat()
+    provenance["export_profile"] = profile
     results, errors = [], []
     out_dir.mkdir(parents=True, exist_ok=True)
     # Never reuse stale exports from a preceding invocation of the same folder run.
@@ -79,9 +88,10 @@ def process_folder(model_path, input_dir, out_dir, *, recursive=False, device=No
                 target, image, details["mask"], details["confidence"], predictor.classes,
                 min_region_area=min_region_area, alpha=alpha, raw_mask=details["raw_mask"],
                 entropy=details["entropy"], review_mask=details["review_mask"],
-                provenance={**provenance, "source_image": relative},
+                provenance={**provenance, "source_image": relative}, profile=profile,
             )
             metadata = json.loads(paths["regions"].read_text(encoding="utf-8"))
+            labelme = metadata.get("labelme")
             mean_entropy = float(details["entropy"].mean())
             fraction = float(details["review_mask"].mean())
             results.append({
@@ -93,12 +103,15 @@ def process_folder(model_path, input_dir, out_dir, *, recursive=False, device=No
                 "review_pixels": int(details["review_mask"].sum()),
                 "region_count": metadata["region_count"],
                 "priority_score": 0.6 * fraction + 0.4 * mean_entropy,
-                "omitted_polygon_regions": len(metadata["labelme"]["omitted_regions"]),
+                "omitted_polygon_regions": len(labelme["omitted_regions"]) if labelme is not None else None,
                 "paths": {key: value.relative_to(out_dir).as_posix() for key, value in paths.items()},
             })
         except (ValueError, OSError, RuntimeError) as error:
             errors.append({"image": path.name, "source_relative": relative,
                            "status": "error", "error": str(error)})
+        finally:
+            # Release full-size arrays before loading or predicting the next section.
+            image = details = None
         if progress is not None:
             progress(index, len(source_files), relative)
     results.sort(key=lambda row: (-row["priority_score"], -row["mean_entropy"], row["source_relative"]))
@@ -107,6 +120,7 @@ def process_folder(model_path, input_dir, out_dir, *, recursive=False, device=No
     summary = {
         "total_images": len(source_files), "successful_images": len(results), "failed_images": len(errors),
         "review_pixels": sum(row["review_pixels"] for row in results),
+        "export_profile": profile,
         "priority_rule": "0.6*review_fraction + 0.4*mean_entropy (uncalibrated heuristic)",
         "provenance": provenance,
     }
@@ -125,11 +139,19 @@ def process_folder(model_path, input_dir, out_dir, *, recursive=False, device=No
             writer.writerow(safe)
     if archive is not None:
         archive.parent.mkdir(parents=True, exist_ok=True)
-        # Package this invocation only; previous output directories are not included.
-        files = [index_csv, index_json, *(path for path in run_dir.rglob("*") if path.is_file())]
-        with ZipFile(archive, "w", compression=ZIP_DEFLATED) as bundle:
-            for path in files:
-                bundle.write(path, arcname=path.relative_to(out_dir).as_posix())
+        # Stream only files advertised in these indices into a replaceable archive.
+        with NamedTemporaryFile(prefix=".facies-archive-", suffix=".tmp", dir=archive.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            with ZipFile(temporary, "w", compression=ZIP_DEFLATED, compresslevel=ZIP_LEVELS[zip_compression]) as bundle:
+                for path in (index_csv, index_json):
+                    bundle.write(path, arcname=path.name)
+                for row in results:
+                    for relative in row["paths"].values():
+                        bundle.write(out_dir / relative, arcname=relative)
+            temporary.replace(archive)
+        finally:
+            temporary.unlink(missing_ok=True)
     return {"results": results, "errors": errors, "summary": summary,
             "index_csv": index_csv, "index_json": index_json, "zip": archive}
 
@@ -141,6 +163,10 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument("--zip", dest="zip_path", type=Path)
+    parser.add_argument("--zip-compression", choices=ZIP_LEVELS, default="fast",
+                        help="fast rút ngắn thời gian nén, compact ưu tiên giảm dung lượng ZIP.")
+    parser.add_argument("--profile", choices=EXPORT_PROFILES, default="review",
+                        help="standard xuất kết quả gọn, review kèm ảnh nguồn và tệp chỉnh nhãn.")
     parser.add_argument("--device", default=default_device())
     parser.add_argument("--tile-size", type=int)
     parser.add_argument("--overlap", type=int)
@@ -156,6 +182,7 @@ def main():
             tile_size=args.tile_size, overlap=args.overlap, batch_size=args.batch_size,
             tta=args.tta, confidence_threshold=args.confidence_threshold,
             min_region_area=args.min_region_area, alpha=args.alpha, zip_path=args.zip_path,
+            profile=args.profile, zip_compression=args.zip_compression,
             progress=lambda done, total, name: print(f"[{done}/{total}] {name}", flush=True),
         )
     except (ValueError, OSError, RuntimeError, KeyError, pickle.UnpicklingError) as error:
